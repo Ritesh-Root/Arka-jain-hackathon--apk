@@ -17,6 +17,10 @@ export interface MedicalProfile {
 }
 
 const PROFILE_KEY = "jeevan_rakshak_profile";
+const ONBOARDING_KEY = "jeevan_rakshak_onboarding_completed";
+
+export const PRIMARY_EMERGENCY_NUMBER = "8210950528";
+export const SECONDARY_EMERGENCY_NUMBER = "9304673802";
 
 export function getDefaultProfile(): MedicalProfile {
   return {
@@ -30,11 +34,7 @@ export function getDefaultProfile(): MedicalProfile {
       { name: "Telmisartan", dose: "40mg" },
       { name: "Metformin", dose: "500mg" },
     ],
-    emergencyContacts: [
-      { name: "Vikram Sharma", relationship: "Son", phone: "+919800012345" },
-      { name: "Priya Sharma", relationship: "Daughter", phone: "+919900054321" },
-      { name: "Dr. Kavita", relationship: "Doctor", phone: "+919700098765" },
-    ],
+    emergencyContacts: [],
     publicToken: crypto.randomUUID(),
   };
 }
@@ -49,4 +49,44 @@ export function loadProfile(): MedicalProfile {
   const def = getDefaultProfile();
   saveProfile(def);
   return def;
+}
+
+export function isOnboardingCompleted(): boolean {
+  return localStorage.getItem(ONBOARDING_KEY) === "true";
+}
+
+export function markOnboardingCompleted(): void {
+  localStorage.setItem(ONBOARDING_KEY, "true");
+}
+
+function normalizePhone(phone: string): string {
+  return phone.replace(/[^\d+]/g, "");
+}
+
+export function getEmergencyDialTargets(profile: MedicalProfile): EmergencyContact[] {
+  const baseTargets: EmergencyContact[] = [
+    {
+      name: "Primary Emergency",
+      relationship: "Emergency",
+      phone: PRIMARY_EMERGENCY_NUMBER,
+    },
+    {
+      name: "Secondary Emergency",
+      relationship: "Emergency",
+      phone: SECONDARY_EMERGENCY_NUMBER,
+    },
+    ...profile.emergencyContacts,
+  ];
+
+  const seen = new Set<string>();
+  const cleanedTargets: EmergencyContact[] = [];
+
+  for (const target of baseTargets) {
+    const cleanedPhone = normalizePhone(target.phone);
+    if (!cleanedPhone || seen.has(cleanedPhone)) continue;
+    seen.add(cleanedPhone);
+    cleanedTargets.push({ ...target, phone: cleanedPhone });
+  }
+
+  return cleanedTargets;
 }

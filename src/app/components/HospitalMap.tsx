@@ -14,6 +14,12 @@ export function HospitalMap() {
   const leafletRef = useRef<any>(null);
   const mapInitialized = useRef(false);
 
+  const requestCallPermission = (hospitalName: string, phone: string, callType: "Emergency" | "Ambulance") => {
+    const shouldCall = window.confirm(`Call ${hospitalName} ${callType.toLowerCase()} line at ${phone}?`);
+    if (!shouldCall) return;
+    window.location.href = `tel:${phone}`;
+  };
+
   useEffect(() => {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -96,7 +102,9 @@ export function HospitalMap() {
       markersRef.current.push(
         L.marker([h.lat, h.lng], { icon: hospitalIcon })
           .addTo(map)
-          .bindPopup(`<b>${h.name}</b><br>${dist.toFixed(1)} km | ${h.bedsAvailable} beds`)
+          .bindPopup(
+            `<b>${h.name}</b><br>${dist.toFixed(1)} km | ${h.bedsAvailable}/${h.bedsTotal} beds<br>${h.area}<br>${h.traumaLevel} | ${h.hasIcu ? "ICU" : "No ICU"} | ${h.hasBloodBank ? "Blood Bank" : "No Blood Bank"}`
+          )
       );
 
       if (isNearest) {
@@ -114,12 +122,17 @@ export function HospitalMap() {
 
   // Simulate bed updates
   const [beds, setBeds] = useState(nearest);
+
+  useEffect(() => {
+    setBeds(nearest);
+  }, [nearest]);
+
   useEffect(() => {
     const iv = setInterval(() => {
       setBeds((prev) =>
         prev.map((h) => ({
           ...h,
-          bedsAvailable: Math.max(1, h.bedsAvailable + Math.floor(Math.random() * 3) - 1),
+          bedsAvailable: Math.min(h.bedsTotal, Math.max(1, h.bedsAvailable + Math.floor(Math.random() * 3) - 1)),
         }))
       );
     }, 10000);
@@ -140,7 +153,7 @@ export function HospitalMap() {
       </GlassCard>
 
       <div className="space-y-3">
-        <h3 className="text-[#1e1b4b]">Nearest Hospitals</h3>
+        <h3 className="text-[#1e1b4b]">Nearest Hospitals Near You</h3>
         {beds.map((h, i) => (
           <GlassCard key={h.name} className="p-4">
             <div className="flex items-start justify-between">
@@ -152,13 +165,36 @@ export function HospitalMap() {
                 <div className="flex gap-4 mt-2 text-sm text-[#6b7280]">
                   <span className="flex items-center gap-1"><Navigation size={14} /> {h.distance.toFixed(1)} km</span>
                   <span className="flex items-center gap-1"><Clock size={14} /> {h.eta} min</span>
-                  <span className="flex items-center gap-1"><Bed size={14} /> {h.bedsAvailable} beds</span>
+                  <span className="flex items-center gap-1"><Bed size={14} /> {h.bedsAvailable}/{h.bedsTotal} beds</span>
                 </div>
-                <div className="mt-1.5 text-xs text-[#9ca3af]">{h.type} | {h.traumaLevel}</div>
+                <div className="mt-1.5 text-xs text-[#9ca3af]">{h.type} | {h.traumaLevel} | {h.area}</div>
+                <div className="mt-1 text-xs text-[#6b7280] flex items-center gap-1">
+                  <MapPin size={12} />
+                  <span>{h.address}</span>
+                </div>
+                <div className="mt-2 flex gap-2 text-[11px] text-[#6b7280] flex-wrap">
+                  <span className="px-2 py-1 rounded-full bg-white/50">{h.is24x7 ? "24x7" : "Limited Hours"}</span>
+                  <span className="px-2 py-1 rounded-full bg-white/50">{h.hasIcu ? "ICU" : "No ICU"}</span>
+                  <span className="px-2 py-1 rounded-full bg-white/50">{h.hasBloodBank ? "Blood Bank" : "No Blood Bank"}</span>
+                </div>
+                <p className="mt-2 text-xs text-[#6b7280]">Emergency: {h.phoneEmergency} | Ambulance: {h.phoneAmbulance}</p>
               </div>
-              <a href={`tel:${h.phone}`} className="px-3 py-2 rounded-xl bg-gradient-to-r from-[#34d399] to-[#059669] text-white text-sm flex items-center gap-1">
-                <Phone size={14} /> Call
-              </a>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => requestCallPermission(h.name, h.phoneEmergency, "Emergency")}
+                  className="px-3 py-2 rounded-xl bg-gradient-to-r from-[#34d399] to-[#059669] text-white text-sm flex items-center gap-1"
+                >
+                  <Phone size={14} /> Call
+                </button>
+                <button
+                  type="button"
+                  onClick={() => requestCallPermission(h.name, h.phoneAmbulance, "Ambulance")}
+                  className="px-3 py-2 rounded-xl bg-white/70 text-[#047857] text-sm flex items-center gap-1"
+                >
+                  <Phone size={14} /> Ambulance
+                </button>
+              </div>
             </div>
           </GlassCard>
         ))}
@@ -170,9 +206,14 @@ export function HospitalMap() {
           {hospitals.map((h) => {
             const dist = haversineDistance(coords.lat, coords.lng, h.lat, h.lng);
             return (
-              <div key={h.name} className="flex items-center justify-between text-sm py-2 border-b border-white/30 last:border-0">
-                <span className="text-[#1e1b4b]">{h.name}</span>
-                <span className="text-[#6b7280]">{dist.toFixed(1)} km</span>
+              <div key={h.name} className="text-sm py-2 border-b border-white/30 last:border-0">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-[#1e1b4b]">{h.name}</span>
+                    <p className="text-xs text-[#6b7280]">{h.area} | {h.traumaLevel} | {h.bedsAvailable}/{h.bedsTotal} beds</p>
+                  </div>
+                  <span className="text-[#6b7280]">{dist.toFixed(1)} km</span>
+                </div>
               </div>
             );
           })}

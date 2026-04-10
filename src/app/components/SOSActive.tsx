@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { loadProfile } from "../lib/storage";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { loadProfile, getEmergencyDialTargets, PRIMARY_EMERGENCY_NUMBER } from "../lib/storage";
 import { getNearestHospitals } from "../lib/hospitals";
 import { Phone, MapPin, Mic, X, ChevronRight, MessageSquare, Droplets } from "lucide-react";
 import { useNavigate } from "react-router";
@@ -10,16 +10,20 @@ interface SOSActiveProps {
 
 export function SOSActive({ onDeactivate }: SOSActiveProps) {
   const profile = loadProfile();
+  const callTargets = useMemo(() => getEmergencyDialTargets(profile), [profile]);
   const navigate = useNavigate();
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [nearestHospitals, setNearestHospitals] = useState<ReturnType<typeof getNearestHospitals>>([]);
   const [currentContactIndex, setCurrentContactIndex] = useState(0);
-  const [, setCallStatus] = useState<string>("Calling...");
+  const [callStatus, setCallStatus] = useState<string>("Preparing emergency dispatch...");
+  const [smsStatus, setSmsStatus] = useState<string>("Waiting for location lock...");
   const [timer, setTimer] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const cascadeRef = useRef<ReturnType<typeof setTimeout>>();
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const hasStartedCallsRef = useRef(false);
+  const hasTriggeredSmsRef = useRef(false);
 
   useEffect(() => {
     navigator.geolocation.getCurrentPosition(
@@ -40,6 +44,86 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
     timerRef.current = setInterval(() => setTimer((t) => t + 1), 1000);
     return () => clearInterval(timerRef.current);
   }, []);
+
+  const formatPhone = (phone: string) => phone.replace(/[^\d+]/g, "");
+
+  const buildEmergencyMessage = useCallback(
+    (lat: number, lng: number) => {
+      const locationUrl = `https://maps.google.com/?q=${lat},${lng}`;
+      return `SOS ALERT! ${profile.fullName} needs urgent help. Blood: ${profile.bloodType}. Allergies: ${profile.allergies.join(", ") || "N/A"}. Location: ${locationUrl}`;
+    },
+    [profile]
+  );
+
+  const callNumber = useCallback((phone: string) => {
+    const normalized = formatPhone(phone);
+    if (!normalized) return;
+    window.location.href = `tel:${normalized}`;
+  }, []);
+
+  const openEmergencySmsComposer = useCallback(
+    (lat: number, lng: number) => {
+      const recipients = Array.from(new Set(callTargets.map((target) => formatPhone(target.phone)).filter(Boolean)));
+      if (!recipients.length) return;
+      const smsUrl = `sms:${recipients.join(",")}?body=${encodeURIComponent(buildEmergencyMessage(lat, lng))}`;
+      window.location.href = smsUrl;
+      setSmsStatus(`SMS composer opened for ${recipients.length} emergency numbers. Tap send to dispatch.`);
+    },
+    [buildEmergencyMessage, callTargets]
+  );
+
+  const dialContactAtIndex = useCallback(
+    (index: number) => {
+      const target = callTargets[index];
+      if (!target) return;
+      setCurrentContactIndex(index);
+      setCallStatus(`Calling ${target.name} (${target.relationship}) at ${target.phone}`);
+      callNumber(target.phone);
+    },
+    [callNumber, callTargets]
+  );
+
+  useEffect(() => {
+    if (hasStartedCallsRef.current) return;
+    if (!callTargets.length) {
+      setCallStatus(`No contacts configured. Add contacts in profile. Primary emergency: ${PRIMARY_EMERGENCY_NUMBER}`);
+      return;
+    }
+    hasStartedCallsRef.current = true;
+    dialContactAtIndex(0);
+  }, [callTargets, dialContactAtIndex]);
+
+  useEffect(() => {
+    if (!callTargets.length) return;
+    if (currentContactIndex >= callTargets.length - 1) {
+      setCallStatus("Reached last emergency number in cascade. Use Call button to retry.");
+      return;
+    }
+
+    cascadeRef.current = setTimeout(() => {
+      const nextIndex = currentContactIndex + 1;
+      const nextTarget = callTargets[nextIndex];
+      setCallStatus(`No response detected. Trying next number: ${nextTarget.name}`);
+      dialContactAtIndex(nextIndex);
+    }, 30000);
+
+    return () => clearTimeout(cascadeRef.current);
+  }, [currentContactIndex, callTargets, dialContactAtIndex]);
+
+  useEffect(() => {
+    if (!coords || hasTriggeredSmsRef.current) return;
+    hasTriggeredSmsRef.current = true;
+
+    const timeout = setTimeout(() => {
+      try {
+        openEmergencySmsComposer(coords.lat, coords.lng);
+      } catch {
+        setSmsStatus("Could not open SMS app automatically. Use the Send SMS button.");
+      }
+    }, 1500);
+
+    return () => clearTimeout(timeout);
+  }, [coords, openEmergencySmsComposer]);
 
   useEffect(() => {
     try {
@@ -88,22 +172,31 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
     return () => { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); };
   }, []);
 
-  useEffect(() => {
-    cascadeRef.current = setTimeout(() => {
-      if (currentContactIndex < profile.emergencyContacts.length - 1) {
-        setCurrentContactIndex((i) => i + 1);
-        setCallStatus("Calling...");
-      }
-    }, 30000);
-    return () => clearTimeout(cascadeRef.current);
-  }, [currentContactIndex]);
-
-  const currentContact = profile.emergencyContacts[currentContactIndex];
+  const currentContact = callTargets[currentContactIndex];
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
 
   const sendWhatsApp = (phone: string) => {
     const msg = encodeURIComponent(`EMERGENCY! ${profile.fullName} needs help. Location: https://maps.google.com/?q=${coords?.lat},${coords?.lng}`);
     window.open(`https://wa.me/${phone.replace(/\+/g, "")}?text=${msg}`, "_blank");
+  };
+
+  const callCurrentContact = () => {
+    if (!currentContact) return;
+    dialContactAtIndex(currentContactIndex);
+  };
+
+  const callNextContact = () => {
+    if (currentContactIndex >= callTargets.length - 1) return;
+    clearTimeout(cascadeRef.current);
+    dialContactAtIndex(currentContactIndex + 1);
+  };
+
+  const sendSmsNow = () => {
+    if (!coords) {
+      setSmsStatus("Waiting for GPS lock before SMS.");
+      return;
+    }
+    openEmergencySmsComposer(coords.lat, coords.lng);
   };
 
   const deactivate = () => {
@@ -127,6 +220,16 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
               Recording audio
             </div>
           )}
+        </div>
+
+        <div className="bg-white/15 backdrop-blur-xl rounded-3xl p-4 border border-white/10 space-y-2">
+          <p className="text-sm">Call Status: <span className="opacity-80">{callStatus}</span></p>
+          <p className="text-sm">SMS Status: <span className="opacity-80">{smsStatus}</span></p>
+          <div className="flex gap-2 pt-1">
+            <button onClick={callCurrentContact} className="flex-1 px-3 py-2 bg-white/20 rounded-xl text-sm">Call Now</button>
+            <button onClick={callNextContact} className="flex-1 px-3 py-2 bg-white/20 rounded-xl text-sm">Call Next</button>
+            <button onClick={sendSmsNow} className="flex-1 px-3 py-2 bg-white/20 rounded-xl text-sm">Send SMS</button>
+          </div>
         </div>
 
         {/* Patient info */}
@@ -167,7 +270,7 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
         {/* Contact cascade */}
         <div className="bg-white/15 backdrop-blur-xl rounded-3xl p-5 space-y-3 border border-white/10">
           <h3>Contact Cascade</h3>
-          {profile.emergencyContacts.map((c, i) => (
+          {callTargets.map((c, i) => (
             <div key={c.phone} className={`flex items-center justify-between p-3 rounded-2xl transition-all ${
               i === currentContactIndex ? "bg-white/20 border border-white/30" : "bg-white/5 opacity-50"
             }`}>
@@ -178,7 +281,7 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
               <div className="flex gap-2">
                 {i === currentContactIndex && (
                   <>
-                    <a href={`tel:${c.phone}`} className="px-3 py-1.5 bg-green-500 rounded-full text-sm flex items-center gap-1"><Phone size={12} /> Call</a>
+                    <button onClick={() => dialContactAtIndex(i)} className="px-3 py-1.5 bg-green-500 rounded-full text-sm flex items-center gap-1"><Phone size={12} /> Call</button>
                     <button onClick={() => sendWhatsApp(c.phone)} className="px-3 py-1.5 bg-[#25D366] rounded-full text-sm flex items-center gap-1"><MessageSquare size={12} /> WA</button>
                   </>
                 )}
@@ -187,8 +290,8 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
               </div>
             </div>
           ))}
-          {currentContactIndex < profile.emergencyContacts.length - 1 && (
-            <button onClick={() => { setCurrentContactIndex((i) => i + 1); clearTimeout(cascadeRef.current); }} className="w-full py-2.5 bg-white/15 rounded-2xl flex items-center justify-center gap-1 text-sm">
+          {currentContactIndex < callTargets.length - 1 && (
+            <button onClick={callNextContact} className="w-full py-2.5 bg-white/15 rounded-2xl flex items-center justify-center gap-1 text-sm">
               Skip to next contact <ChevronRight size={16} />
             </button>
           )}

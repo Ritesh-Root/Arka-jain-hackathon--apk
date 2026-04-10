@@ -2,20 +2,76 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router";
 import { Home, QrCode, Map, Heart, Mic } from "lucide-react";
 import { SOSActive } from "./SOSActive";
+import { loadProfile, saveProfile, isOnboardingCompleted, markOnboardingCompleted, PRIMARY_EMERGENCY_NUMBER } from "../lib/storage";
+import { enableAndroidBackgroundProtection, syncAndroidEmergencyConfig } from "../lib/androidHotword";
+import { toast } from "sonner";
 
 export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [sosActive, setSosActive] = useState(false);
   const [voiceListening, setVoiceListening] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [contactName, setContactName] = useState("");
+  const [contactRelationship, setContactRelationship] = useState("Family");
+  const [contactPhone, setContactPhone] = useState("");
   const tapTimesRef = useRef<number[]>([]);
   const recognitionRef = useRef<any>(null);
-  const sosCountRef = useRef(0);
+  const keywordDetectionsRef = useRef<number[]>([]);
+
+  const syncBackgroundProtection = useCallback(async () => {
+    const profile = loadProfile();
+    const contactNumbers = profile.emergencyContacts.map((contact) => contact.phone).filter(Boolean);
+
+    try {
+      await syncAndroidEmergencyConfig(PRIMARY_EMERGENCY_NUMBER, contactNumbers);
+      await enableAndroidBackgroundProtection(PRIMARY_EMERGENCY_NUMBER, contactNumbers);
+    } catch {
+      toast.error("Allow microphone, call and SMS permissions for 24x7 Android protection.");
+    }
+  }, []);
 
   const triggerSOS = useCallback(() => {
     setSosActive(true);
     if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
   }, []);
+
+  useEffect(() => {
+    if (!isOnboardingCompleted()) {
+      setOnboardingOpen(true);
+    }
+  }, []);
+
+  const handleOnboardingSave = async () => {
+    if (!contactName.trim() || !contactPhone.trim()) {
+      toast.error("Please add contact name and phone number");
+      return;
+    }
+
+    const profile = loadProfile();
+    const newContact = {
+      name: contactName.trim(),
+      relationship: contactRelationship.trim() || "Emergency Contact",
+      phone: contactPhone.trim(),
+    };
+
+    const updatedProfile = {
+      ...profile,
+      emergencyContacts: [newContact, ...profile.emergencyContacts].slice(0, 3),
+    };
+
+    saveProfile(updatedProfile);
+    markOnboardingCompleted();
+    setOnboardingOpen(false);
+    toast.success("Emergency contact saved");
+    await syncBackgroundProtection();
+  };
+
+  useEffect(() => {
+    if (!onboardingOpen && isOnboardingCompleted()) {
+      void syncBackgroundProtection();
+    }
+  }, [onboardingOpen, syncBackgroundProtection]);
 
   // Triple-tap detection
   useEffect(() => {
@@ -45,19 +101,28 @@ export function Layout() {
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.lang = "en-IN";
 
     recognition.onresult = (event: any) => {
+      const keywordPattern = /\bsos\b|\bhelp\b|bachao|बचाओ/gi;
+      const now = Date.now();
+
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript.toLowerCase();
-        if (transcript.includes("sos")) {
-          sosCountRef.current++;
-          if (sosCountRef.current >= 2) {
-            sosCountRef.current = 0;
-            triggerSOS();
+        const transcript = event.results[i][0].transcript.toLowerCase().trim();
+        const hits = transcript.match(keywordPattern)?.length ?? 0;
+
+        if (hits > 0) {
+          for (let h = 0; h < hits; h++) {
+            keywordDetectionsRef.current.push(now);
           }
-          setTimeout(() => { sosCountRef.current = Math.max(0, sosCountRef.current - 1); }, 5000);
+          keywordDetectionsRef.current = keywordDetectionsRef.current.filter((t) => now - t < 7000);
+
+          if (keywordDetectionsRef.current.length >= 3) {
+            keywordDetectionsRef.current = [];
+            triggerSOS();
+            return;
+          }
         }
       }
     };
@@ -107,7 +172,45 @@ export function Layout() {
         <div className="fixed top-3 right-3 z-50 px-3 py-1.5 rounded-full bg-white/60 backdrop-blur-xl text-[#7c3aed] text-xs flex items-center gap-1.5 shadow-sm border border-white/40">
           <Mic size={12} />
           <div className="w-1.5 h-1.5 rounded-full bg-[#7c3aed] animate-pulse" />
-          Voice
+          Voice SOS/Help/Bachao
+        </div>
+      )}
+
+      {onboardingOpen && (
+        <div className="fixed inset-0 z-[120] bg-[#1e1b4b]/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-white/40">
+            <p className="text-sm text-[#7c3aed]/80">First-time setup</p>
+            <h2 className="text-[#1e1b4b] mt-1">Who should we call in emergency?</h2>
+            <p className="text-sm text-[#6b7280] mt-1">Add the primary person to call when SOS is triggered.</p>
+
+            <div className="mt-4 space-y-3">
+              <input
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                placeholder="Contact name"
+                className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+              />
+              <input
+                value={contactRelationship}
+                onChange={(e) => setContactRelationship(e.target.value)}
+                placeholder="Relationship"
+                className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+              />
+              <input
+                value={contactPhone}
+                onChange={(e) => setContactPhone(e.target.value)}
+                placeholder="Phone number"
+                className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+              />
+            </div>
+
+            <button
+              onClick={handleOnboardingSave}
+              className="mt-5 w-full py-3 rounded-2xl bg-gradient-to-r from-[#a78bfa] to-[#7c3aed] text-white"
+            >
+              Save Emergency Contact
+            </button>
+          </div>
         </div>
       )}
 

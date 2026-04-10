@@ -1,27 +1,102 @@
-export interface Hospital {
+import hospitalsDataset from "../../data/hospitals_jamshedpur.json";
+
+type OwnershipType = "govt" | "private";
+
+interface HospitalDatasetMeta {
+  city: string;
+  district: string;
+  state: string;
+  country: string;
+  last_verified: string;
+  source: string;
+  total_entries: number;
+}
+
+interface HospitalDatasetEntry {
+  id: string;
   name: string;
+  short_name: string;
+  address: string;
+  area: string;
+  lat: number;
+  lng: number;
+  type: OwnershipType;
+  trauma_level: number;
+  phone_primary: string;
+  phone_emergency: string;
+  phone_ambulance: string;
+  beds_total: number;
+  beds_available: number;
+  specialties: string[];
+  has_blood_bank: boolean;
+  has_icu: boolean;
+  is_24x7: boolean;
+  notes: string;
+}
+
+interface HospitalDataset {
+  _meta: HospitalDatasetMeta;
+  hospitals: HospitalDatasetEntry[];
+}
+
+export interface Hospital {
+  id: string;
+  name: string;
+  shortName: string;
+  address: string;
+  area: string;
   lat: number;
   lng: number;
   type: string;
+  ownershipType: OwnershipType;
+  bedsTotal: number;
   bedsAvailable: number;
   traumaLevel: string;
+  traumaLevelNumber: number;
   phone: string;
+  phonePrimary: string;
+  phoneEmergency: string;
+  phoneAmbulance: string;
+  hasBloodBank: boolean;
+  hasIcu: boolean;
+  is24x7: boolean;
+  specialties: string[];
+  notes: string;
 }
 
-export const hospitals: Hospital[] = [
-  { name: "Tata Main Hospital (TMH)", lat: 22.7896, lng: 86.2030, type: "Government", bedsAvailable: 12, traumaLevel: "Level 1", phone: "+916572432001" },
-  { name: "MGM Medical College", lat: 22.8046, lng: 86.2089, type: "Government", bedsAvailable: 8, traumaLevel: "Level 1", phone: "+916572432002" },
-  { name: "Brahmananda Narayana", lat: 22.7756, lng: 86.1450, type: "Private", bedsAvailable: 15, traumaLevel: "Level 2", phone: "+916572432003" },
-  { name: "Tinplate Hospital", lat: 22.7830, lng: 86.1850, type: "PSU", bedsAvailable: 6, traumaLevel: "Level 2", phone: "+916572432004" },
-  { name: "Suman Hospital", lat: 22.8120, lng: 86.2150, type: "Private", bedsAvailable: 4, traumaLevel: "Level 3", phone: "+916572432005" },
-  { name: "Telco Main Hospital", lat: 22.7650, lng: 86.1680, type: "PSU", bedsAvailable: 10, traumaLevel: "Level 2", phone: "+916572432006" },
-  { name: "Mercy Hospital", lat: 22.7980, lng: 86.1980, type: "Private", bedsAvailable: 7, traumaLevel: "Level 3", phone: "+916572432007" },
-  { name: "Manipal Tata Medical Center", lat: 22.7710, lng: 86.1520, type: "Private", bedsAvailable: 20, traumaLevel: "Level 1", phone: "+916572432008" },
-  { name: "Kashyap Memorial Eye Hospital", lat: 22.8050, lng: 86.2100, type: "Private", bedsAvailable: 3, traumaLevel: "Level 3", phone: "+916572432009" },
-  { name: "Rai Hospital", lat: 22.7900, lng: 86.1900, type: "Private", bedsAvailable: 5, traumaLevel: "Level 3", phone: "+916572432010" },
-  { name: "Woodland Hospital", lat: 22.8000, lng: 86.2050, type: "Private", bedsAvailable: 9, traumaLevel: "Level 2", phone: "+916572432011" },
-  { name: "Life Care Hospital", lat: 22.7850, lng: 86.1750, type: "Private", bedsAvailable: 6, traumaLevel: "Level 3", phone: "+916572432012" },
-];
+const ownershipTypeLabels: Record<OwnershipType, string> = {
+  govt: "Government",
+  private: "Private",
+};
+
+const dataset = hospitalsDataset as HospitalDataset;
+
+export const hospitalsMeta = dataset._meta;
+
+export const hospitals: Hospital[] = dataset.hospitals.map((entry) => ({
+  id: entry.id,
+  name: entry.name,
+  shortName: entry.short_name,
+  address: entry.address,
+  area: entry.area,
+  lat: entry.lat,
+  lng: entry.lng,
+  type: ownershipTypeLabels[entry.type],
+  ownershipType: entry.type,
+  bedsTotal: entry.beds_total,
+  bedsAvailable: entry.beds_available,
+  traumaLevel: `Level ${entry.trauma_level}`,
+  traumaLevelNumber: entry.trauma_level,
+  phone: entry.phone_emergency || entry.phone_primary || entry.phone_ambulance,
+  phonePrimary: entry.phone_primary,
+  phoneEmergency: entry.phone_emergency,
+  phoneAmbulance: entry.phone_ambulance,
+  hasBloodBank: entry.has_blood_bank,
+  hasIcu: entry.has_icu,
+  is24x7: entry.is_24x7,
+  specialties: entry.specialties,
+  notes: entry.notes,
+}));
 
 export function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
@@ -33,7 +108,10 @@ export function haversineDistance(lat1: number, lon1: number, lat2: number, lon2
 
 export function getNearestHospitals(lat: number, lng: number, count = 3) {
   return hospitals
-    .map((h) => ({ ...h, distance: haversineDistance(lat, lng, h.lat, h.lng), eta: Math.ceil((haversineDistance(lat, lng, h.lat, h.lng) / 40) * 60) }))
+    .map((h) => {
+      const distance = haversineDistance(lat, lng, h.lat, h.lng);
+      return { ...h, distance, eta: Math.ceil((distance / 40) * 60) };
+    })
     .sort((a, b) => a.distance - b.distance)
     .slice(0, count);
 }

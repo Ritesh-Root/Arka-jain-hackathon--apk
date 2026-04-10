@@ -59,7 +59,7 @@ export function Home() {
           <AlertTriangle size={16} className="text-amber-600" />
         </div>
         <p className="text-sm text-[#1e1b4b]/70">
-          Say <span className="text-[#7c3aed]">"SOS SOS SOS"</span> or triple-tap for emergency
+          Say <span className="text-[#7c3aed]">"SOS SOS SOS"</span>, triple-tap, or shake phone repeatedly for emergency
         </p>
       </div>
 

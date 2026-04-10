@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { loadProfile, saveProfile, MedicalProfile } from "../lib/storage";
+import { loadProfile, saveProfile, MedicalProfile, PRIMARY_EMERGENCY_NUMBER } from "../lib/storage";
+import { syncAndroidEmergencyConfig } from "../lib/androidHotword";
 import { GlassCard } from "./GlassCard";
 import { User, Heart, Pill, Phone, Save, Plus, X } from "lucide-react";
 import { toast } from "sonner";
@@ -17,8 +18,10 @@ export function Profile() {
 
   const update = (partial: Partial<MedicalProfile>) => setProfile((p) => ({ ...p, ...partial }));
 
-  const handleSave = () => {
+  const handleSave = async () => {
     saveProfile(profile);
+    const contactNumbers = profile.emergencyContacts.map((contact) => contact.phone).filter(Boolean);
+    await syncAndroidEmergencyConfig(PRIMARY_EMERGENCY_NUMBER, contactNumbers);
     toast.success("Profile saved successfully");
   };
 
