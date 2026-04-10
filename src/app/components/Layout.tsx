@@ -12,7 +12,11 @@ import {
   PRIMARY_EMERGENCY_NUMBER,
   SETTINGS_UPDATED_EVENT,
 } from "../lib/storage";
-import { enableAndroidBackgroundProtection, syncAndroidEmergencyConfig } from "../lib/androidHotword";
+import {
+  enableAndroidBackgroundProtection,
+  openAndroidPermissionSettings,
+  syncAndroidEmergencyConfig,
+} from "../lib/androidHotword";
 import { toast } from "sonner";
 
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
@@ -125,7 +129,11 @@ export function Layout() {
 
   const requestPermissionStep = useCallback(async (step: PermissionStep["id"]) => {
     if (step === "android-system") {
-      return await syncBackgroundProtection({ suppressToast: true });
+      const started = await syncBackgroundProtection({ suppressToast: true });
+      if (!started) {
+        await openAndroidPermissionSettings();
+      }
+      return started;
     }
 
     switch (step) {
@@ -185,6 +193,17 @@ export function Layout() {
         return true;
     }
   }, [syncBackgroundProtection]);
+
+  const openSettingsManually = useCallback(async () => {
+    try {
+      await openAndroidPermissionSettings();
+      setPermissionError(
+        "App Settings opened. Enable Microphone, Camera, Phone, SMS and Notifications, then return and tap the button again."
+      );
+    } catch {
+      setPermissionError("Could not open app settings automatically. Please open app settings manually.");
+    }
+  }, []);
 
   const runPermissionStep = useCallback(async () => {
     const current = permissionSteps[permissionStepIndex];
@@ -478,6 +497,16 @@ export function Layout() {
                     ? "Open System Permission Popup"
                     : `Allow ${current?.title}`}
               </button>
+
+              {isAndroidNative && (
+                <button
+                  onClick={openSettingsManually}
+                  disabled={permissionBusy}
+                  className="mt-2 w-full py-3 rounded-2xl bg-white border border-[#d8b4fe] text-[#7c3aed] disabled:opacity-60"
+                >
+                  Open App Settings
+                </button>
+              )}
 
               {Capacitor.getPlatform() === "android" && (
                 <p className="text-[11px] text-[#6b7280] mt-3">

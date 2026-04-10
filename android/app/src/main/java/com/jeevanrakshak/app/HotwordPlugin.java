@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
+import android.provider.Settings;
 
 import androidx.core.content.ContextCompat;
 
@@ -63,6 +65,19 @@ public class HotwordPlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("running", isServiceRunning());
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void openAppSettings(PluginCall call) {
+        try {
+            Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            intent.setData(Uri.fromParts("package", getContext().getPackageName(), null));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Unable to open app settings.", e);
+        }
     }
 
     private void ensurePermissionsThenStart(PluginCall call) {

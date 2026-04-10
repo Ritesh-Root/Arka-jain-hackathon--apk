@@ -5,6 +5,7 @@ interface HotwordServicePlugin {
   stop(): Promise<void>;
   syncConfig(options: { emergencyNumber: string; contactNumbers: string[]; shakeEnabled: boolean }): Promise<void>;
   status(): Promise<{ running: boolean }>;
+  openAppSettings(): Promise<void>;
 }
 
 const HotwordService = registerPlugin<HotwordServicePlugin>("HotwordService");
@@ -40,4 +41,9 @@ export async function getAndroidProtectionStatus(): Promise<boolean> {
   if (!isAndroidNative()) return false;
   const response = await HotwordService.status();
   return !!response.running;
+}
+
+export async function openAndroidPermissionSettings() {
+  if (!isAndroidNative()) return;
+  await HotwordService.openAppSettings();
 }
