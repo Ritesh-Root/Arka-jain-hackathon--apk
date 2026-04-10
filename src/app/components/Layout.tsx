@@ -19,12 +19,21 @@ const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const PERMISSION_SETUP_KEY = "jeevan_rakshak_permission_setup_completed";
 
 type PermissionStep = {
-  id: "system" | "microphone" | "camera" | "location" | "notifications";
+  id: "android-system" | "system" | "microphone" | "camera" | "location" | "notifications";
   title: string;
   description: string;
 };
 
-const PERMISSION_STEPS: PermissionStep[] = [
+const ANDROID_PERMISSION_STEPS: PermissionStep[] = [
+  {
+    id: "android-system",
+    title: "System Permission Flow",
+    description:
+      "Tap continue to open native Android permission popups one-by-one (microphone, camera, call, SMS, notifications).",
+  },
+];
+
+const WEB_PERMISSION_STEPS: PermissionStep[] = [
   {
     id: "system",
     title: "System Motion Permission",
@@ -81,8 +90,10 @@ export function Layout() {
   const tapTimesRef = useRef<number[]>([]);
   const recognitionRef = useRef<any>(null);
   const keywordDetectionsRef = useRef<number[]>([]);
+  const isAndroidNative = Capacitor.getPlatform() === "android";
+  const permissionSteps = isAndroidNative ? ANDROID_PERMISSION_STEPS : WEB_PERMISSION_STEPS;
 
-  const syncBackgroundProtection = useCallback(async () => {
+  const syncBackgroundProtection = useCallback(async (options?: { suppressToast?: boolean }) => {
     const profile = loadProfile();
     const currentSettings = loadSettings();
     const contactNumbers = profile.emergencyContacts.map((contact) => contact.phone).filter(Boolean);
@@ -98,8 +109,12 @@ export function Layout() {
         contactNumbers,
         currentSettings.shakeSOSEnabled
       );
+      return true;
     } catch {
-      toast.error("Allow microphone, call and SMS permissions for 24x7 Android protection.");
+      if (!options?.suppressToast) {
+        toast.error("Allow microphone, call and SMS permissions for 24x7 Android protection.");
+      }
+      return false;
     }
   }, []);
 
@@ -109,6 +124,10 @@ export function Layout() {
   }, []);
 
   const requestPermissionStep = useCallback(async (step: PermissionStep["id"]) => {
+    if (step === "android-system") {
+      return await syncBackgroundProtection({ suppressToast: true });
+    }
+
     switch (step) {
       case "system": {
         const evt = window.DeviceMotionEvent as any;
@@ -119,12 +138,30 @@ export function Layout() {
         return true;
       }
       case "microphone": {
+        if (navigator.permissions?.query) {
+          try {
+            const status = await navigator.permissions.query({ name: "microphone" as PermissionName });
+            if (status.state === "granted") return true;
+          } catch {
+            // Continue with direct request.
+          }
+        }
+
         if (!navigator.mediaDevices?.getUserMedia) return false;
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         stream.getTracks().forEach((t) => t.stop());
         return true;
       }
       case "camera": {
+        if (navigator.permissions?.query) {
+          try {
+            const status = await navigator.permissions.query({ name: "camera" as PermissionName });
+            if (status.state === "granted") return true;
+          } catch {
+            // Continue with direct request.
+          }
+        }
+
         if (!navigator.mediaDevices?.getUserMedia) return false;
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         stream.getTracks().forEach((t) => t.stop());
@@ -147,10 +184,10 @@ export function Layout() {
       default:
         return true;
     }
-  }, []);
+  }, [syncBackgroundProtection]);
 
   const runPermissionStep = useCallback(async () => {
-    const current = PERMISSION_STEPS[permissionStepIndex];
+    const current = permissionSteps[permissionStepIndex];
     if (!current || permissionBusy) return;
 
     setPermissionBusy(true);
@@ -163,12 +200,14 @@ export function Layout() {
         return;
       }
 
-      if (permissionStepIndex >= PERMISSION_STEPS.length - 1) {
+      if (permissionStepIndex >= permissionSteps.length - 1) {
         localStorage.setItem(PERMISSION_SETUP_KEY, "true");
         setPermissionSetupOpen(false);
         setPermissionStepIndex(0);
         toast.success("All emergency permissions granted.");
-        await syncBackgroundProtection();
+        if (!isAndroidNative) {
+          await syncBackgroundProtection();
+        }
         return;
       }
 
@@ -178,7 +217,14 @@ export function Layout() {
     } finally {
       setPermissionBusy(false);
     }
-  }, [permissionBusy, permissionStepIndex, requestPermissionStep, syncBackgroundProtection]);
+  }, [
+    isAndroidNative,
+    permissionBusy,
+    permissionStepIndex,
+    permissionSteps,
+    requestPermissionStep,
+    syncBackgroundProtection,
+  ]);
 
   useEffect(() => {
     const handleSettingsUpdated = () => setSettings(loadSettings());
@@ -404,11 +450,11 @@ export function Layout() {
       )}
 
       {permissionSetupOpen && (() => {
-        const current = PERMISSION_STEPS[permissionStepIndex];
+        const current = permissionSteps[permissionStepIndex];
         return (
           <div className="fixed inset-0 z-[125] bg-[#1e1b4b]/55 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-white/40">
-              <p className="text-sm text-[#7c3aed]/80">Permissions Setup ({permissionStepIndex + 1}/{PERMISSION_STEPS.length})</p>
+              <p className="text-sm text-[#7c3aed]/80">Permissions Setup ({permissionStepIndex + 1}/{permissionSteps.length})</p>
               <h2 className="text-[#1e1b4b] mt-1">{current?.title}</h2>
               <p className="text-sm text-[#6b7280] mt-1">{current?.description}</p>
               <p className="text-xs text-[#9ca3af] mt-3">
@@ -426,7 +472,11 @@ export function Layout() {
                 disabled={permissionBusy}
                 className="mt-5 w-full py-3 rounded-2xl bg-gradient-to-r from-[#a78bfa] to-[#7c3aed] text-white disabled:opacity-60"
               >
-                {permissionBusy ? "Requesting permission..." : `Allow ${current?.title}`}
+                {permissionBusy
+                  ? "Requesting permission..."
+                  : isAndroidNative
+                    ? "Open System Permission Popup"
+                    : `Allow ${current?.title}`}
               </button>
 
               {Capacitor.getPlatform() === "android" && (
