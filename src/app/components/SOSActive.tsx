@@ -27,9 +27,57 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const cascadeRef = useRef<ReturnType<typeof setTimeout>>();
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const mediaChunksRef = useRef<BlobPart[]>([]);
+  const hasExportedRecordingRef = useRef(false);
   const hasStartedCallsRef = useRef(false);
   const hasTriggeredSmsRef = useRef(false);
   const activeCoords = coords ?? ARKA_JAIN_JAMSHEDPUR_COORDS;
+
+  const exportAudioEvidence = useCallback((blob: Blob) => {
+    if (!blob.size || hasExportedRecordingRef.current) return;
+    hasExportedRecordingRef.current = true;
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const fileName = `sos-audio-${timestamp}.webm`;
+    const downloadUrl = URL.createObjectURL(blob);
+
+    const anchor = document.createElement("a");
+    anchor.href = downloadUrl;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 30000);
+    setSmsStatus((prev) => (prev.includes("Audio evidence") ? prev : `${prev} Audio evidence saved.`));
+    toast.success("SOS audio recording saved.");
+  }, []);
+
+  const stopAudioCapture = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.requestData();
+      } catch {
+        // Ignore requestData failure and continue stopping recorder.
+      }
+      try {
+        recorder.stop();
+      } catch {
+        // Ignore stop failure.
+      }
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
+  }, []);
 
   useEffect(() => {
     navigator.geolocation.getCurrentPosition(
@@ -186,23 +234,58 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
   }, []);
 
   useEffect(() => {
-    let mediaRecorder: MediaRecorder | null = null;
-    let mediaStream: MediaStream | null = null;
+    let cancelled = false;
+
     (async () => {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        setSmsStatus((prev) => `${prev} Audio recording unavailable on this device.`);
+        return;
+      }
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaStream = stream;
-        mediaRecorder = new MediaRecorder(stream);
-        mediaRecorder.start();
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaStreamRef.current = stream;
+        mediaRecorderRef.current = mediaRecorder;
+        mediaChunksRef.current = [];
+        hasExportedRecordingRef.current = false;
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            mediaChunksRef.current.push(event.data);
+          }
+        };
+
+        mediaRecorder.onerror = () => {
+          setSmsStatus((prev) => `${prev} Audio recording error detected.`);
+        };
+
+        mediaRecorder.onstop = () => {
+          const chunks = mediaChunksRef.current;
+          mediaChunksRef.current = [];
+          if (!chunks.length) return;
+          const mimeType = mediaRecorder.mimeType || "audio/webm";
+          exportAudioEvidence(new Blob(chunks, { type: mimeType }));
+        };
+
+        mediaRecorder.start(1000);
         setIsRecording(true);
-      } catch {}
+      } catch {
+        setIsRecording(false);
+        setSmsStatus((prev) => `${prev} Audio recording unavailable (mic permission denied).`);
+      }
     })();
+
     return () => {
-      if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-      if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
-      setIsRecording(false);
+      cancelled = true;
+      stopAudioCapture();
     };
-  }, []);
+  }, [exportAudioEvidence, stopAudioCapture]);
 
   const currentContact = callTargets[currentContactIndex];
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
@@ -235,6 +318,7 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
 
   const deactivate = () => {
     if (audioCtxRef.current && audioCtxRef.current.state !== "closed") audioCtxRef.current.close();
+    stopAudioCapture();
     onDeactivate();
   };
 
