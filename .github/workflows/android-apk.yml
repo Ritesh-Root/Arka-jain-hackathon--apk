@@ -38,8 +38,14 @@ jobs:
       - name: Install npm dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Sync Capacitor Android project
-        run: npm run android:sync
+      - name: Build web app
+        run: npm run build
+
+      - name: Copy web assets to Android
+        run: npx cap copy android
+
+      - name: Ensure Gradle wrapper is executable
+        run: chmod +x android/gradlew
 
       - name: Build debug APK
         working-directory: android
