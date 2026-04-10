@@ -55,10 +55,27 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: |
+          set +e
+          ./gradlew assembleDebug --stacktrace --no-daemon > ../gradle-build.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Gradle build failed. Last 200 lines:"
+            tail -n 200 ../gradle-build.log
+            summary=$(tail -n 40 ../gradle-build.log | tr '\n' '|' | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
+            echo "::error title=Gradle assembleDebug failed::$summary"
+            exit "$status"
+          fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: jeevan-rakshak-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload Gradle build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: gradle-build.log
