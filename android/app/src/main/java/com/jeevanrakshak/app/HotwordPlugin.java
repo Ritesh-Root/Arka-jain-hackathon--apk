@@ -57,6 +57,9 @@ public class HotwordPlugin extends Plugin {
         String contactsCsv = contactsToCsv(contacts);
 
         EmergencyConfigStore.saveConfig(getContext(), emergencyNumber, contactsCsv, shakeEnabled);
+        if (isServiceRunning()) {
+            startHotwordService(emergencyNumber, contactsCsv, shakeEnabled);
+        }
         call.resolve();
     }
 

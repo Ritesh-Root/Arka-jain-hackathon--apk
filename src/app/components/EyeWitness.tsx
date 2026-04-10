@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from "react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import { GlassCard } from "./GlassCard";
 import { Camera, Volume2, Send, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
 
@@ -45,20 +45,54 @@ const MOCK_REPORTS: SceneReport[] = [
 export function EyeWitness() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [cameraActive, setCameraActive] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [report, setReport] = useState<SceneReport | null>(null);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [errorText, setErrorText] = useState("");
   const streamRef = useRef<MediaStream | null>(null);
 
+  const waitForVideoFrame = useCallback(async (video: HTMLVideoElement) => {
+    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) return true;
+
+    await new Promise<void>((resolve) => {
+      let resolved = false;
+      const finish = () => {
+        if (resolved) return;
+        resolved = true;
+        video.removeEventListener("loadeddata", finish);
+        video.removeEventListener("canplay", finish);
+        resolve();
+      };
+
+      video.addEventListener("loadeddata", finish);
+      video.addEventListener("canplay", finish);
+      setTimeout(finish, 1200);
+    });
+
+    return video.videoWidth > 0 && video.videoHeight > 0;
+  }, []);
+
   const startCamera = useCallback(async () => {
+    setErrorText("");
+    setCameraReady(false);
+    setCapturedImage(null);
+    setReport(null);
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: { ideal: "environment" } },
       });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        videoRef.current.setAttribute("playsinline", "true");
+        await videoRef.current.play();
+        const ready = await waitForVideoFrame(videoRef.current);
+        setCameraReady(ready);
+        if (!ready) {
+          setErrorText("Camera is initializing. Please wait a moment and try capture again.");
+        }
       }
       setCameraActive(true);
     } catch {
@@ -67,25 +101,42 @@ export function EyeWitness() {
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.play();
+          videoRef.current.setAttribute("playsinline", "true");
+          await videoRef.current.play();
+          const ready = await waitForVideoFrame(videoRef.current);
+          setCameraReady(ready);
+          if (!ready) {
+            setErrorText("Camera is initializing. Please wait a moment and try capture again.");
+          }
         }
         setCameraActive(true);
       } catch {
-        alert("Camera access denied. Please allow camera permissions.");
+        setErrorText("Camera access denied. Please allow camera permissions.");
       }
     }
-  }, []);
+  }, [waitForVideoFrame]);
 
-  const captureScene = useCallback(() => {
+  const captureScene = useCallback(async () => {
     if (!videoRef.current) return;
+
+    setErrorText("");
+    const ready = await waitForVideoFrame(videoRef.current);
+    if (!ready) {
+      setErrorText("Camera is still warming up. Try capture again in a second.");
+      return;
+    }
+
     const canvas = document.createElement("canvas");
     canvas.width = videoRef.current.videoWidth || 640;
     canvas.height = videoRef.current.videoHeight || 480;
     const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0);
-      setCapturedImage(canvas.toDataURL("image/jpeg"));
+    if (!ctx) {
+      setErrorText("Could not initialize capture canvas.");
+      return;
     }
+
+    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+    setCapturedImage(canvas.toDataURL("image/jpeg", 0.9));
 
     setAnalyzing(true);
 
@@ -101,15 +152,26 @@ export function EyeWitness() {
         speechSynthesis.speak(utterance);
       }
     }, 2500);
-  }, []);
+  }, [waitForVideoFrame]);
 
   const stopCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    setCameraReady(false);
     setCameraActive(false);
   };
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      speechSynthesis.cancel();
+    };
+  }, []);
 
   const speakReport = () => {
     if (report && "speechSynthesis" in window) {
@@ -146,16 +208,22 @@ export function EyeWitness() {
           </button>
         ) : (
           <div className="relative">
-            <video ref={videoRef} className="w-full h-[300px] object-cover rounded-t-3xl" playsInline muted />
+            <video ref={videoRef} className="w-full h-[300px] object-cover rounded-t-3xl" playsInline autoPlay muted />
             <div className="p-3 flex gap-2">
-              <button onClick={captureScene} disabled={analyzing} className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-[#a78bfa] to-[#7c3aed] text-white disabled:opacity-50 active:scale-[0.98] transition-transform">
-                {analyzing ? "Analyzing..." : "Capture Scene"}
+              <button onClick={() => void captureScene()} disabled={analyzing || !cameraReady} className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-[#a78bfa] to-[#7c3aed] text-white disabled:opacity-50 active:scale-[0.98] transition-transform">
+                {analyzing ? "Analyzing..." : cameraReady ? "Capture Scene" : "Initializing Camera..."}
               </button>
               <button onClick={stopCamera} className="py-3 px-5 rounded-2xl bg-red-50/80 text-red-600 border border-red-100/50">Stop</button>
             </div>
           </div>
         )}
       </GlassCard>
+
+      {errorText && (
+        <GlassCard className="p-4 border border-red-100/50">
+          <p className="text-red-600 text-sm">{errorText}</p>
+        </GlassCard>
+      )}
 
       {analyzing && (
         <GlassCard className="p-6 text-center">

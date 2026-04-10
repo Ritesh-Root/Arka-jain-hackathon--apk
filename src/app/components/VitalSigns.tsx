@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from "react";
+import React, { useRef, useState, useCallback, useEffect } from "react";
 import { GlassCard } from "./GlassCard";
 import { loadProfile } from "../lib/storage";
 import { Camera, Send, AlertTriangle, CheckCircle, XCircle, Siren } from "lucide-react";
@@ -71,44 +71,103 @@ export function VitalSigns() {
   const streamRef = useRef<MediaStream | null>(null);
 
   const [cameraActive, setCameraActive] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [report, setReport] = useState<ScanTreatmentReport | null>(null);
   const [errorText, setErrorText] = useState("");
 
+  const waitForVideoFrame = useCallback(async (video: HTMLVideoElement) => {
+    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) return true;
+
+    await new Promise<void>((resolve) => {
+      let resolved = false;
+      const finish = () => {
+        if (resolved) return;
+        resolved = true;
+        video.removeEventListener("loadeddata", finish);
+        video.removeEventListener("canplay", finish);
+        resolve();
+      };
+
+      video.addEventListener("loadeddata", finish);
+      video.addEventListener("canplay", finish);
+      setTimeout(finish, 1200);
+    });
+
+    return video.videoWidth > 0 && video.videoHeight > 0;
+  }, []);
+
   const startCamera = useCallback(async () => {
     setErrorText("");
+    setCameraReady(false);
+    setCapturedImage(null);
+    setReport(null);
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: { ideal: "environment" } },
       });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute("playsinline", "true");
         await videoRef.current.play();
+        const ready = await waitForVideoFrame(videoRef.current);
+        setCameraReady(ready);
+        if (!ready) {
+          setErrorText("Camera is initializing. Please wait a moment and try scan again.");
+        }
       }
       setCameraActive(true);
     } catch {
-      setErrorText("Camera permission is required to scan the patient.");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.setAttribute("playsinline", "true");
+          await videoRef.current.play();
+          const ready = await waitForVideoFrame(videoRef.current);
+          setCameraReady(ready);
+          if (!ready) {
+            setErrorText("Camera is initializing. Please wait a moment and try scan again.");
+          }
+        }
+        setCameraActive(true);
+      } catch {
+        setErrorText("Camera permission is required to scan the patient.");
+      }
     }
-  }, []);
+  }, [waitForVideoFrame]);
 
   const stopCamera = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    setCameraReady(false);
     setCameraActive(false);
   }, []);
 
   const scanPatient = useCallback(async () => {
     if (!videoRef.current) return;
 
+    setErrorText("");
+    const ready = await waitForVideoFrame(videoRef.current);
+    if (!ready) {
+      setErrorText("Camera is still warming up. Please try scan again.");
+      return;
+    }
+
     const canvas = document.createElement("canvas");
     canvas.width = videoRef.current.videoWidth || 640;
     canvas.height = videoRef.current.videoHeight || 480;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      setErrorText("Could not initialize capture canvas.");
+      return;
+    }
 
     ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     const imageDataUrl = canvas.toDataURL("image/jpeg", 0.9);
@@ -184,7 +243,16 @@ export function VitalSigns() {
     } finally {
       setAnalyzing(false);
     }
-  }, [profile]);
+  }, [profile, waitForVideoFrame]);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+    };
+  }, []);
 
   const severityColor: Record<ScanTreatmentReport["severity"], string> = {
     critical: "from-[#ef4444] to-[#dc2626]",
@@ -213,14 +281,14 @@ export function VitalSigns() {
         </GlassCard>
       ) : (
         <GlassCard className="overflow-hidden">
-          <video ref={videoRef} className="w-full h-[280px] object-cover rounded-t-3xl" playsInline muted />
+          <video ref={videoRef} className="w-full h-[280px] object-cover rounded-t-3xl" playsInline autoPlay muted />
           <div className="p-3 flex gap-2">
             <button
-              onClick={scanPatient}
-              disabled={analyzing}
+              onClick={() => void scanPatient()}
+              disabled={analyzing || !cameraReady}
               className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-[#a78bfa] to-[#7c3aed] text-white disabled:opacity-50 active:scale-[0.98] transition-transform"
             >
-              {analyzing ? "Analyzing patient..." : "Scan Patient"}
+              {analyzing ? "Analyzing patient..." : cameraReady ? "Scan Patient" : "Initializing Camera..."}
             </button>
             <button
               onClick={stopCamera}

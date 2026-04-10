@@ -32,6 +32,18 @@ type PermissionSnapshot = {
   sms: PermissionStateLabel;
 };
 
+type DiagnosticEntry = {
+  timestamp: number;
+  type: string;
+  source?: string;
+  transcript?: string;
+  hits?: number;
+  count?: number;
+  gForce?: number;
+  threshold?: number;
+  error?: string;
+};
+
 const DEFAULT_PERMISSION_SNAPSHOT: PermissionSnapshot = {
   microphone: "unknown",
   camera: "unknown",
@@ -40,6 +52,9 @@ const DEFAULT_PERMISSION_SNAPSHOT: PermissionSnapshot = {
   phoneCall: "unknown",
   sms: "unknown",
 };
+
+const DIAGNOSTICS_EVENT_NAME = "jr_diagnostics_event";
+const MAX_DIAGNOSTICS = 20;
 
 function statePillClass(value: PermissionStateLabel): string {
   if (value === "granted") return "bg-green-50 text-green-700 border-green-200";
@@ -62,7 +77,13 @@ export function Profile() {
   const [newCondition, setNewCondition] = useState("");
   const [permissionSnapshot, setPermissionSnapshot] = useState<PermissionSnapshot>(DEFAULT_PERMISSION_SNAPSHOT);
   const [permissionsLoading, setPermissionsLoading] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const isAndroidNative = Capacitor.getPlatform() === "android";
+
+  const voiceApiAvailable =
+    typeof window !== "undefined" &&
+    ("webkitSpeechRecognition" in window || "SpeechRecognition" in window);
+  const motionApiAvailable = typeof window !== "undefined" && "DeviceMotionEvent" in window;
 
   useEffect(() => {
     setProfile(loadProfile());
@@ -119,6 +140,42 @@ export function Profile() {
     }
   }, [isAndroidNative]);
 
+  const applyShakeSetting = useCallback(async (enabled: boolean) => {
+    setShakeSOSEnabled(enabled);
+    saveSettings({ shakeSOSEnabled: enabled });
+
+    const contactNumbers = profile.emergencyContacts.map((contact) => contact.phone).filter(Boolean);
+    try {
+      await syncAndroidEmergencyConfig(PRIMARY_EMERGENCY_NUMBER, contactNumbers, enabled);
+    } catch {
+      // Keep local setting even if native sync is unavailable.
+    }
+  }, [profile.emergencyContacts]);
+
+  const toggleShakeSOSEnabled = useCallback(async () => {
+    const nextValue = !shakeSOSEnabled;
+    if (!nextValue) {
+      await applyShakeSetting(false);
+      return;
+    }
+
+    const motionApi = window.DeviceMotionEvent as any;
+    if (motionApi && typeof motionApi.requestPermission === "function") {
+      try {
+        const motionStatus = await motionApi.requestPermission();
+        if (motionStatus !== "granted") {
+          toast.error("Motion permission is required for Shake SOS.");
+          return;
+        }
+      } catch {
+        toast.error("Could not request motion permission.");
+        return;
+      }
+    }
+
+    await applyShakeSetting(true);
+  }, [applyShakeSetting, shakeSOSEnabled]);
+
   useEffect(() => {
     void refreshPermissionSnapshot();
 
@@ -129,6 +186,21 @@ export function Profile() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshPermissionSnapshot]);
+
+  useEffect(() => {
+    const onDiagnostic = (event: Event) => {
+      const customEvent = event as CustomEvent<DiagnosticEntry>;
+      const detail = customEvent.detail;
+      if (!detail || !detail.type) return;
+
+      setDiagnostics((previous) => [detail, ...previous].slice(0, MAX_DIAGNOSTICS));
+    };
+
+    window.addEventListener(DIAGNOSTICS_EVENT_NAME, onDiagnostic as EventListener);
+    return () => {
+      window.removeEventListener(DIAGNOSTICS_EVENT_NAME, onDiagnostic as EventListener);
+    };
+  }, []);
 
   const update = (partial: Partial<MedicalProfile>) => setProfile((p) => ({ ...p, ...partial }));
 
@@ -177,6 +249,18 @@ export function Profile() {
     toast("Open your browser/site settings to update permissions manually.");
   };
 
+  const clearDiagnostics = () => setDiagnostics([]);
+
+  const formatDiagnosticLine = (entry: DiagnosticEntry) => {
+    const extras: string[] = [];
+    if (entry.source) extras.push(`source=${entry.source}`);
+    if (typeof entry.hits === "number") extras.push(`hits=${entry.hits}`);
+    if (typeof entry.count === "number") extras.push(`count=${entry.count}`);
+    if (typeof entry.gForce === "number") extras.push(`g=${entry.gForce}`);
+    if (entry.error) extras.push(`error=${entry.error}`);
+    return extras.length ? `${entry.type} (${extras.join(", ")})` : entry.type;
+  };
+
   return (
     <div className="p-4 pb-28 space-y-4">
       <div className="pt-6 pb-2">
@@ -192,7 +276,7 @@ export function Profile() {
           <span className="text-[#1e1b4b]">SOS Trigger Settings</span>
         </div>
         <button
-          onClick={() => setShakeSOSEnabled((v) => !v)}
+          onClick={() => void toggleShakeSOSEnabled()}
           className="w-full flex items-center justify-between px-4 py-3 rounded-2xl bg-white/60 border border-white/50"
         >
           <div className="text-left">
@@ -252,6 +336,57 @@ export function Profile() {
         <p className="text-xs text-[#6b7280]">
           For best 24x7 SOS reliability, set battery mode to Unrestricted for this app.
         </p>
+      </GlassCard>
+
+      <GlassCard className="p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-[#1e1b4b]">SOS Diagnostics</span>
+          <button
+            onClick={clearDiagnostics}
+            className="px-3 py-1.5 text-xs rounded-full bg-white/70 border border-white/50 text-[#4b5563]"
+          >
+            Clear
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="px-3 py-2 rounded-xl bg-white/60 border border-white/50">
+            <p className="text-[#6b7280]">Voice API</p>
+            <p className="text-[#1e1b4b]">{voiceApiAvailable ? "Available" : "Not supported"}</p>
+          </div>
+          <div className="px-3 py-2 rounded-xl bg-white/60 border border-white/50">
+            <p className="text-[#6b7280]">Motion API</p>
+            <p className="text-[#1e1b4b]">{motionApiAvailable ? "Available" : "Not supported"}</p>
+          </div>
+          <div className="px-3 py-2 rounded-xl bg-white/60 border border-white/50">
+            <p className="text-[#6b7280]">Shake SOS</p>
+            <p className="text-[#1e1b4b]">{shakeSOSEnabled ? "Enabled" : "Disabled"}</p>
+          </div>
+          <div className="px-3 py-2 rounded-xl bg-white/60 border border-white/50">
+            <p className="text-[#6b7280]">Captured events</p>
+            <p className="text-[#1e1b4b]">{diagnostics.length}</p>
+          </div>
+        </div>
+
+        <div className="max-h-52 overflow-y-auto rounded-2xl border border-white/50 bg-white/60">
+          {diagnostics.length === 0 ? (
+            <p className="px-3 py-4 text-sm text-[#6b7280]">
+              No diagnostics yet. Speak hotwords or shake to test event capture.
+            </p>
+          ) : (
+            diagnostics.map((entry, index) => (
+              <div
+                key={`${entry.timestamp}-${entry.type}-${index}`}
+                className="px-3 py-2 border-b border-white/40 last:border-b-0"
+              >
+                <p className="text-xs text-[#6b7280]">
+                  {new Date(entry.timestamp).toLocaleTimeString()}
+                </p>
+                <p className="text-sm text-[#1e1b4b]">{formatDiagnosticLine(entry)}</p>
+              </div>
+            ))
+          )}
+        </div>
       </GlassCard>
 
       <GlassCard className="p-5 space-y-3">

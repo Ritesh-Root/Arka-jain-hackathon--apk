@@ -58,9 +58,12 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
     private final List<Long> detections = new ArrayList<>();
     private final List<Long> shakeDetections = new ArrayList<>();
     private final Pattern hotwordPattern = Pattern.compile(
-        "\\b(sos|help|bachao|बचाओ|madad|मदद|emergency)\\b",
+        "\\b(sos|help|bachao|bachaao|bacho|bacao|बचाओ|madad|मदद|emergency)\\b",
         Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
     );
+    private final Pattern sosRepeatPattern = Pattern.compile("(?:\\bsos\\b[\\s,!.?-]*){3,}", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private final Pattern helpRepeatPattern = Pattern.compile("(?:\\bhelp\\b[\\s,!.?-]*){3,}", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private final Pattern bachaoRepeatPattern = Pattern.compile("(?:(?:\\bbachao\\b|\\bbachaao\\b|\\bbacho\\b|\\bbacao\\b|बचाओ)[\\s,!.?-]*){3,}", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     private SpeechRecognizer speechRecognizer;
     private Intent speechIntent;
@@ -247,12 +250,10 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
 
         for (String transcript : matches) {
             if (transcript == null) continue;
-            String normalized = transcript.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+            String normalized = normalizeTranscript(transcript);
+            if (normalized.isEmpty()) continue;
 
-            if (normalized.contains("sos sos sos")
-                || normalized.contains("help help help")
-                || normalized.contains("bachao bachao bachao")
-                || normalized.contains("बचाओ बचाओ बचाओ")) {
+            if (isRepeatedEmergencyPhrase(normalized)) {
                 triggerEmergencySequence("Hotword");
                 return;
             }
@@ -267,12 +268,26 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
             detections.add(now);
         }
 
-        detections.removeIf(t -> now - t > 7000);
+        detections.removeIf(t -> now - t > 8000);
 
         if (detections.size() >= 3) {
             detections.clear();
             triggerEmergencySequence("Hotword");
         }
+    }
+
+    private String normalizeTranscript(String transcript) {
+        return transcript
+            .toLowerCase(Locale.ROOT)
+            .replaceAll("[^\\p{L}\\p{N}\\s]", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+    }
+
+    private boolean isRepeatedEmergencyPhrase(String normalizedTranscript) {
+        return sosRepeatPattern.matcher(normalizedTranscript).find()
+            || helpRepeatPattern.matcher(normalizedTranscript).find()
+            || bachaoRepeatPattern.matcher(normalizedTranscript).find();
     }
 
     private synchronized void triggerEmergencySequence(String reason) {
@@ -462,7 +477,7 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
         }
 
         long now = System.currentTimeMillis();
-        if (now - lastShakeSampleAt < 350) {
+        if (now - lastShakeSampleAt < 220) {
             return;
         }
 
@@ -471,15 +486,15 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
         float gZ = event.values[2] / SensorManager.GRAVITY_EARTH;
         double gForce = Math.sqrt(gX * gX + gY * gY + gZ * gZ);
 
-        if (gForce < 2.7) {
+        if (gForce < 2.2) {
             return;
         }
 
         lastShakeSampleAt = now;
         shakeDetections.add(now);
-        shakeDetections.removeIf(t -> now - t > 4500);
+        shakeDetections.removeIf(t -> now - t > 5000);
 
-        if (shakeDetections.size() >= 4) {
+        if (shakeDetections.size() >= 3) {
             shakeDetections.clear();
             triggerEmergencySequence("Shake");
         }

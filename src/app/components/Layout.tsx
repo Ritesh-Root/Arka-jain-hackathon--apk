@@ -21,6 +21,7 @@ import { toast } from "sonner";
 
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const PERMISSION_SETUP_KEY = "jeevan_rakshak_permission_setup_completed";
+const DIAGNOSTICS_EVENT_NAME = "jr_diagnostics_event";
 
 type PermissionStep = {
   id: "android-system" | "system" | "microphone" | "camera" | "location" | "notifications";
@@ -64,6 +65,32 @@ const WEB_PERMISSION_STEPS: PermissionStep[] = [
     description: "Required to keep background emergency guard service visible.",
   },
 ];
+
+const HOTWORD_COUNT_PATTERN = /\b(sos|help|emergency|bachao|bachaao|bacho|bacao|madad|बचाओ|मदद)\b/gi;
+const SOS_REPEAT_PATTERN = /(?:\bsos\b[\s,!.?-]*){3,}/i;
+const HELP_REPEAT_PATTERN = /(?:\bhelp\b[\s,!.?-]*){3,}/i;
+const BACHAO_REPEAT_PATTERN = /(?:(?:\bbachao\b|\bbachaao\b|\bbacho\b|\bbacao\b|बचाओ)[\s,!.?-]*){3,}/i;
+
+function normalizeTranscript(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function emitDiagnostic(type: string, payload: Record<string, unknown> = {}): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent(DIAGNOSTICS_EVENT_NAME, {
+      detail: {
+        timestamp: Date.now(),
+        type,
+        ...payload,
+      },
+    })
+  );
+}
 
 function splitCsv(text: string): string[] {
   return text
@@ -122,7 +149,8 @@ export function Layout() {
     }
   }, []);
 
-  const triggerSOS = useCallback(() => {
+  const triggerSOS = useCallback((source: string = "manual") => {
+    emitDiagnostic("sos_trigger", { source });
     setSosActive(true);
     if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
   }, []);
@@ -334,7 +362,8 @@ export function Layout() {
       tapTimesRef.current = tapTimesRef.current.filter((t) => now - t < 800);
       if (tapTimesRef.current.length >= 3) {
         tapTimesRef.current = [];
-        triggerSOS();
+        emitDiagnostic("triple_tap_detected");
+        triggerSOS("triple_tap");
       }
     };
 
@@ -351,96 +380,141 @@ export function Layout() {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = false;
+    recognition.maxAlternatives = 3;
     recognition.lang = "en-IN";
 
     recognition.onresult = (event: any) => {
-      const keywordPattern = /\bsos\b|\bhelp\b|bachao|बचाओ|madad|मदद|emergency/gi;
       const now = Date.now();
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript.toLowerCase().trim();
+        const transcript = normalizeTranscript(event.results[i][0].transcript || "");
+        if (!transcript) continue;
 
         if (
-          transcript.includes("sos sos sos") ||
-          transcript.includes("help help help") ||
-          transcript.includes("bachao bachao bachao") ||
-          transcript.includes("बचाओ बचाओ बचाओ")
+          SOS_REPEAT_PATTERN.test(transcript) ||
+          HELP_REPEAT_PATTERN.test(transcript) ||
+          BACHAO_REPEAT_PATTERN.test(transcript)
         ) {
-          triggerSOS();
+          emitDiagnostic("voice_phrase_match", { transcript });
+          triggerSOS("voice_phrase");
           return;
         }
 
-        const hits = transcript.match(keywordPattern)?.length ?? 0;
+        const hits = transcript.match(HOTWORD_COUNT_PATTERN)?.length ?? 0;
 
         if (hits > 0) {
+          emitDiagnostic("voice_hotword_hits", { transcript, hits });
           for (let h = 0; h < hits; h++) {
             keywordDetectionsRef.current.push(now);
           }
           keywordDetectionsRef.current = keywordDetectionsRef.current.filter((t) => now - t < 7000);
 
           if (keywordDetectionsRef.current.length >= 3) {
+            emitDiagnostic("voice_hotword_threshold", {
+              count: keywordDetectionsRef.current.length,
+            });
             keywordDetectionsRef.current = [];
-            triggerSOS();
+            triggerSOS("voice_keywords");
             return;
           }
         }
       }
     };
 
-    recognition.onerror = () => {
+    recognition.onerror = (event: any) => {
+      emitDiagnostic("voice_error", { error: event?.error || "unknown" });
       setVoiceListening(false);
       setTimeout(() => {
-        try { recognition.start(); setVoiceListening(true); } catch {}
+        try {
+          recognition.start();
+          setVoiceListening(true);
+          emitDiagnostic("voice_restart");
+        } catch {
+          emitDiagnostic("voice_restart_failed");
+        }
       }, 2000);
     };
 
     recognition.onend = () => {
+      emitDiagnostic("voice_end");
       setVoiceListening(false);
       setTimeout(() => {
-        try { recognition.start(); setVoiceListening(true); } catch {}
+        try {
+          recognition.start();
+          setVoiceListening(true);
+          emitDiagnostic("voice_restart");
+        } catch {
+          emitDiagnostic("voice_restart_failed");
+        }
       }, 1000);
     };
 
-    try { recognition.start(); setVoiceListening(true); } catch {}
+    try {
+      recognition.start();
+      setVoiceListening(true);
+      emitDiagnostic("voice_started");
+    } catch {
+      emitDiagnostic("voice_start_failed");
+    }
     recognitionRef.current = recognition;
 
     return () => {
-      try { recognition.stop(); } catch {}
+      try {
+        recognition.stop();
+      } catch {
+        // no-op
+      }
+      emitDiagnostic("voice_stopped");
     };
   }, [permissionSetupOpen, triggerSOS]);
 
   useEffect(() => {
     if (!settings.shakeSOSEnabled) {
+      emitDiagnostic("shake_disabled");
       return;
     }
+
+    emitDiagnostic("shake_enabled");
 
     const shakeDetections: number[] = [];
     let lastSampleAt = 0;
 
     const onMotion = (event: DeviceMotionEvent) => {
-      const acc = event.accelerationIncludingGravity;
+      const acc = event.accelerationIncludingGravity ?? event.acceleration;
       if (!acc) return;
 
+      const xRaw = acc.x ?? 0;
+      const yRaw = acc.y ?? 0;
+      const zRaw = acc.z ?? 0;
+      if (!xRaw && !yRaw && !zRaw) return;
+
       const now = Date.now();
-      if (now - lastSampleAt < 300) return;
+      if (now - lastSampleAt < 180) return;
 
-      const x = (acc.x || 0) / 9.80665;
-      const y = (acc.y || 0) / 9.80665;
-      const z = (acc.z || 0) / 9.80665;
+      const x = xRaw / 9.80665;
+      const y = yRaw / 9.80665;
+      const z = zRaw / 9.80665;
       const gForce = Math.sqrt(x * x + y * y + z * z);
+      const threshold = event.accelerationIncludingGravity ? 2.15 : 1.35;
 
-      if (gForce < 2.7) return;
+      if (gForce < threshold) return;
 
       lastSampleAt = now;
       shakeDetections.push(now);
+      emitDiagnostic("shake_detected", {
+        gForce: Number(gForce.toFixed(2)),
+        threshold,
+        count: shakeDetections.length,
+      });
 
       while (shakeDetections.length && now - shakeDetections[0] > 4500) {
         shakeDetections.shift();
       }
 
-      if (shakeDetections.length >= 4) {
+      if (shakeDetections.length >= 3) {
+        emitDiagnostic("shake_threshold", { count: shakeDetections.length });
         shakeDetections.length = 0;
-        triggerSOS();
+        triggerSOS("shake");
       }
     };
 
@@ -627,7 +701,7 @@ export function Layout() {
 
       {/* Floating SOS button */}
       <button
-        onClick={triggerSOS}
+        onClick={() => triggerSOS("button")}
         className="fixed bottom-[100px] right-5 z-50 w-14 h-14 rounded-full bg-gradient-to-br from-[#ef4444] to-[#991b1b] text-white shadow-[0_4px_20px_rgba(239,68,68,0.4)] flex items-center justify-center active:scale-90 transition-transform"
       >
         <span className="text-xs tracking-wider">SOS</span>
