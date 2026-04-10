@@ -78,7 +78,7 @@ export function VitalSigns() {
   const [errorText, setErrorText] = useState("");
 
   const waitForVideoFrame = useCallback(async (video: HTMLVideoElement) => {
-    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) return true;
+    if (video.readyState >= 3 && video.videoWidth > 0 && video.videoHeight > 0) return true;
 
     await new Promise<void>((resolve) => {
       let resolved = false;
@@ -87,15 +87,17 @@ export function VitalSigns() {
         resolved = true;
         video.removeEventListener("loadeddata", finish);
         video.removeEventListener("canplay", finish);
+        video.removeEventListener("playing", finish);
         resolve();
       };
 
       video.addEventListener("loadeddata", finish);
       video.addEventListener("canplay", finish);
-      setTimeout(finish, 1200);
+      video.addEventListener("playing", finish);
+      setTimeout(finish, 2500);
     });
 
-    return video.videoWidth > 0 && video.videoHeight > 0;
+    return video.readyState >= 3 && video.videoWidth > 0 && video.videoHeight > 0;
   }, []);
 
   const startCamera = useCallback(async () => {
@@ -145,6 +147,9 @@ export function VitalSigns() {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
     setCameraReady(false);
     setCameraActive(false);
@@ -250,6 +255,9 @@ export function VitalSigns() {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
       }
     };
   }, []);

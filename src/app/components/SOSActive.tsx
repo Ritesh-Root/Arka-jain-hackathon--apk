@@ -3,6 +3,7 @@ import { loadProfile, getEmergencyDialTargets, PRIMARY_EMERGENCY_NUMBER } from "
 import { getNearestHospitals } from "../lib/hospitals";
 import { Phone, MapPin, Mic, X, ChevronRight, MessageSquare, Droplets } from "lucide-react";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
 
 interface SOSActiveProps {
   onDeactivate: () => void;
@@ -36,7 +37,8 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
         const c = { lat: 22.8046, lng: 86.2030 };
         setCoords(c);
         setNearestHospitals(getNearestHospitals(c.lat, c.lng));
-      }
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
   }, []);
 
@@ -126,10 +128,14 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
   }, [coords, openEmergencySmsComposer]);
 
   useEffect(() => {
+    let sirenInterval: ReturnType<typeof setInterval> | undefined;
+    let osc: OscillatorNode | null = null;
+    let ctx: AudioContext | null = null;
+
     try {
-      const ctx = new AudioContext();
+      ctx = new AudioContext();
       audioCtxRef.current = ctx;
-      const osc = ctx.createOscillator();
+      osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
       gain.connect(ctx.destination);
@@ -140,15 +146,28 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
 
       let freq = 800;
       let dir = 1;
-      const sirenInterval = setInterval(() => {
+      sirenInterval = setInterval(() => {
         freq += dir * 20;
         if (freq > 1200) dir = -1;
         if (freq < 600) dir = 1;
         osc.frequency.value = freq;
       }, 50);
 
-      return () => { clearInterval(sirenInterval); osc.stop(); if (ctx.state !== "closed") ctx.close(); audioCtxRef.current = null; };
-    } catch {}
+      return () => {
+        if (sirenInterval) clearInterval(sirenInterval);
+        try {
+          osc?.stop();
+        } catch {
+          // no-op
+        }
+        if (ctx && ctx.state !== "closed") void ctx.close();
+        audioCtxRef.current = null;
+      };
+    } catch {
+      return () => {
+        if (sirenInterval) clearInterval(sirenInterval);
+      };
+    }
   }, []);
 
   useEffect(() => {
@@ -161,21 +180,31 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
 
   useEffect(() => {
     let mediaRecorder: MediaRecorder | null = null;
+    let mediaStream: MediaStream | null = null;
     (async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStream = stream;
         mediaRecorder = new MediaRecorder(stream);
         mediaRecorder.start();
         setIsRecording(true);
       } catch {}
     })();
-    return () => { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); };
+    return () => {
+      if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+      if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
+      setIsRecording(false);
+    };
   }, []);
 
   const currentContact = callTargets[currentContactIndex];
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`;
 
   const sendWhatsApp = (phone: string) => {
+    if (!coords) {
+      toast.error("Location not locked yet. Please wait and try WhatsApp again.");
+      return;
+    }
     const msg = encodeURIComponent(`EMERGENCY! ${profile.fullName} needs help. Location: https://maps.google.com/?q=${coords?.lat},${coords?.lng}`);
     window.open(`https://wa.me/${phone.replace(/\+/g, "")}?text=${msg}`, "_blank");
   };

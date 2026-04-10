@@ -185,7 +185,12 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
             return;
         }
 
-        if (isListening) return;
+        try {
+            speechRecognizer.stopListening();
+        } catch (Exception ignored) {
+            // no-op: recognizer may already be idle
+        }
+        isListening = false;
 
         try {
             speechRecognizer.startListening(speechIntent);
@@ -246,7 +251,11 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
         if (matches == null || matches.isEmpty()) return;
 
         long now = System.currentTimeMillis();
-        int hits = 0;
+        if (now - lastEmergencyTriggerAt < EMERGENCY_COOLDOWN_MS) {
+            return;
+        }
+
+        boolean keywordDetected = false;
 
         for (String transcript : matches) {
             if (transcript == null) continue;
@@ -259,12 +268,12 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
             }
 
             Matcher matcher = hotwordPattern.matcher(normalized);
-            while (matcher.find()) {
-                hits++;
+            if (matcher.find()) {
+                keywordDetected = true;
             }
         }
 
-        for (int i = 0; i < hits; i++) {
+        if (keywordDetected) {
             detections.add(now);
         }
 
