@@ -5,6 +5,13 @@ interface HotwordServicePlugin {
   stop(): Promise<void>;
   syncConfig(options: { emergencyNumber: string; contactNumbers: string[]; shakeEnabled: boolean }): Promise<void>;
   status(): Promise<{ running: boolean }>;
+  permissionsStatus(): Promise<{
+    audio: boolean;
+    camera: boolean;
+    call: boolean;
+    sms: boolean;
+    notifications: boolean;
+  }>;
   openAppSettings(): Promise<void>;
 }
 
@@ -46,4 +53,18 @@ export async function getAndroidProtectionStatus(): Promise<boolean> {
 export async function openAndroidPermissionSettings() {
   if (!isAndroidNative()) return;
   await HotwordService.openAppSettings();
+}
+
+export async function getAndroidPermissionStates() {
+  if (!isAndroidNative()) {
+    return {
+      audio: false,
+      camera: false,
+      call: false,
+      sms: false,
+      notifications: false,
+    };
+  }
+
+  return await HotwordService.permissionsStatus();
 }

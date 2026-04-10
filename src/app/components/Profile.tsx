@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { Capacitor } from "@capacitor/core";
 import {
   loadProfile,
   saveProfile,
@@ -7,25 +8,127 @@ import {
   MedicalProfile,
   PRIMARY_EMERGENCY_NUMBER,
 } from "../lib/storage";
-import { syncAndroidEmergencyConfig } from "../lib/androidHotword";
+import {
+  getAndroidPermissionStates,
+  openAndroidPermissionSettings,
+  syncAndroidEmergencyConfig,
+} from "../lib/androidHotword";
 import { GlassCard } from "./GlassCard";
-import { User, Heart, Pill, Phone, Save, Plus, X, Siren } from "lucide-react";
+import { User, Heart, Pill, Phone, Save, Plus, X, Siren, ShieldCheck, RefreshCw, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const COMMON_ALLERGIES = ["Penicillin", "Sulfa drugs", "Aspirin", "Ibuprofen", "Latex", "Peanuts", "Shellfish"];
 const COMMON_CONDITIONS = ["Hypertension", "Type 2 Diabetes", "Type 1 Diabetes", "Asthma", "Heart Disease", "Epilepsy", "Arthritis"];
 
+type PermissionStateLabel = "granted" | "denied" | "prompt" | "unknown";
+
+type PermissionSnapshot = {
+  microphone: PermissionStateLabel;
+  camera: PermissionStateLabel;
+  location: PermissionStateLabel;
+  notifications: PermissionStateLabel;
+  phoneCall: PermissionStateLabel;
+  sms: PermissionStateLabel;
+};
+
+const DEFAULT_PERMISSION_SNAPSHOT: PermissionSnapshot = {
+  microphone: "unknown",
+  camera: "unknown",
+  location: "unknown",
+  notifications: "unknown",
+  phoneCall: "unknown",
+  sms: "unknown",
+};
+
+function statePillClass(value: PermissionStateLabel): string {
+  if (value === "granted") return "bg-green-50 text-green-700 border-green-200";
+  if (value === "denied") return "bg-red-50 text-red-700 border-red-200";
+  if (value === "prompt") return "bg-amber-50 text-amber-700 border-amber-200";
+  return "bg-slate-50 text-slate-600 border-slate-200";
+}
+
+function stateLabel(value: PermissionStateLabel): string {
+  if (value === "granted") return "Granted";
+  if (value === "denied") return "Denied";
+  if (value === "prompt") return "Ask";
+  return "Unknown";
+}
+
 export function Profile() {
   const [profile, setProfile] = useState<MedicalProfile>(loadProfile());
   const [shakeSOSEnabled, setShakeSOSEnabled] = useState(() => loadSettings().shakeSOSEnabled);
   const [newAllergy, setNewAllergy] = useState("");
   const [newCondition, setNewCondition] = useState("");
+  const [permissionSnapshot, setPermissionSnapshot] = useState<PermissionSnapshot>(DEFAULT_PERMISSION_SNAPSHOT);
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
+  const isAndroidNative = Capacitor.getPlatform() === "android";
 
   useEffect(() => {
     setProfile(loadProfile());
     setShakeSOSEnabled(loadSettings().shakeSOSEnabled);
   }, []);
+
+  const refreshPermissionSnapshot = useCallback(async () => {
+    setPermissionsLoading(true);
+
+    try {
+      if (isAndroidNative) {
+        const status = await getAndroidPermissionStates();
+        setPermissionSnapshot({
+          microphone: status.audio ? "granted" : "denied",
+          camera: status.camera ? "granted" : "denied",
+          location: "unknown",
+          notifications: status.notifications ? "granted" : "denied",
+          phoneCall: status.call ? "granted" : "denied",
+          sms: status.sms ? "granted" : "denied",
+        });
+        return;
+      }
+
+      const snapshot: PermissionSnapshot = { ...DEFAULT_PERMISSION_SNAPSHOT };
+
+      if (navigator.permissions?.query) {
+        try {
+          snapshot.microphone = (await navigator.permissions.query({ name: "microphone" as PermissionName })).state as PermissionStateLabel;
+        } catch {
+          snapshot.microphone = "unknown";
+        }
+
+        try {
+          snapshot.camera = (await navigator.permissions.query({ name: "camera" as PermissionName })).state as PermissionStateLabel;
+        } catch {
+          snapshot.camera = "unknown";
+        }
+
+        try {
+          snapshot.location = (await navigator.permissions.query({ name: "geolocation" })).state as PermissionStateLabel;
+        } catch {
+          snapshot.location = "unknown";
+        }
+      }
+
+      if (typeof Notification !== "undefined") {
+        const n = Notification.permission;
+        snapshot.notifications = n === "granted" ? "granted" : n === "denied" ? "denied" : "prompt";
+      }
+
+      setPermissionSnapshot(snapshot);
+    } finally {
+      setPermissionsLoading(false);
+    }
+  }, [isAndroidNative]);
+
+  useEffect(() => {
+    void refreshPermissionSnapshot();
+
+    const onFocus = () => {
+      void refreshPermissionSnapshot();
+    };
+
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshPermissionSnapshot]);
 
   const update = (partial: Partial<MedicalProfile>) => setProfile((p) => ({ ...p, ...partial }));
 
@@ -65,6 +168,15 @@ export function Profile() {
 
   const inputClass = "w-full px-4 py-2.5 rounded-2xl bg-white/60 border border-white/50 outline-none focus:border-[#a78bfa] focus:ring-2 focus:ring-[#a78bfa]/20 transition-all text-[#1e1b4b] placeholder-[#9ca3af]";
 
+  const openSettings = async () => {
+    if (isAndroidNative) {
+      await openAndroidPermissionSettings();
+      return;
+    }
+
+    toast("Open your browser/site settings to update permissions manually.");
+  };
+
   return (
     <div className="p-4 pb-28 space-y-4">
       <div className="pt-6 pb-2">
@@ -91,6 +203,55 @@ export function Profile() {
             <div className={`w-5 h-5 rounded-full bg-white transition-transform ${shakeSOSEnabled ? "translate-x-5" : "translate-x-0"}`} />
           </div>
         </button>
+      </GlassCard>
+
+      <GlassCard className="p-5 space-y-3">
+        <div className="flex items-center gap-2 mb-1">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#0ea5e9] to-[#0369a1] flex items-center justify-center">
+            <ShieldCheck size={16} className="text-white" />
+          </div>
+          <span className="text-[#1e1b4b]">Permissions</span>
+        </div>
+
+        <div className="space-y-2">
+          {[
+            { label: "Microphone", value: permissionSnapshot.microphone },
+            { label: "Camera", value: permissionSnapshot.camera },
+            { label: "Location", value: permissionSnapshot.location },
+            { label: "Notifications", value: permissionSnapshot.notifications },
+            { label: "Phone Call", value: permissionSnapshot.phoneCall },
+            { label: "SMS", value: permissionSnapshot.sms },
+          ].map((item) => (
+            <div key={item.label} className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/60 border border-white/50">
+              <span className="text-[#1e1b4b] text-sm">{item.label}</span>
+              <span className={`text-xs px-2 py-1 rounded-full border ${statePillClass(item.value)}`}>
+                {stateLabel(item.value)}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => void refreshPermissionSnapshot()}
+            disabled={permissionsLoading}
+            className="flex-1 py-2.5 rounded-2xl bg-white/70 border border-white/50 text-[#0f172a] flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            <RefreshCw size={16} className={permissionsLoading ? "animate-spin" : ""} />
+            Refresh Status
+          </button>
+          <button
+            onClick={() => void openSettings()}
+            className="flex-1 py-2.5 rounded-2xl bg-gradient-to-r from-[#0ea5e9] to-[#0369a1] text-white flex items-center justify-center gap-2"
+          >
+            <Settings2 size={16} />
+            Open App Settings
+          </button>
+        </div>
+
+        <p className="text-xs text-[#6b7280]">
+          For best 24x7 SOS reliability, set battery mode to Unrestricted for this app.
+        </p>
       </GlassCard>
 
       <GlassCard className="p-5 space-y-3">

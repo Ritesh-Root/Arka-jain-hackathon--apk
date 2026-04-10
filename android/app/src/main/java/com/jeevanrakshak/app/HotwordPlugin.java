@@ -68,6 +68,17 @@ public class HotwordPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void permissionsStatus(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("audio", getPermissionState("audio") == PermissionState.GRANTED);
+        result.put("camera", getPermissionState("camera") == PermissionState.GRANTED);
+        result.put("call", getPermissionState("call") == PermissionState.GRANTED);
+        result.put("sms", getPermissionState("sms") == PermissionState.GRANTED);
+        result.put("notifications", getPermissionState("notifications") == PermissionState.GRANTED);
+        call.resolve(result);
+    }
+
+    @PluginMethod
     public void openAppSettings(PluginCall call) {
         try {
             Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
