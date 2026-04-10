@@ -106,6 +106,11 @@ export function VitalSigns() {
     setCapturedImage(null);
     setReport(null);
 
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setErrorText("Camera API is not supported on this device/browser.");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" } },

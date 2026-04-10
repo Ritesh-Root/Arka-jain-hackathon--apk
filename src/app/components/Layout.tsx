@@ -79,6 +79,18 @@ function normalizeTranscript(text: string): string {
     .trim();
 }
 
+async function ensureMicrophoneAccess(): Promise<boolean> {
+  if (!navigator.mediaDevices?.getUserMedia) return false;
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function emitDiagnostic(type: string, payload: Record<string, unknown> = {}): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(
@@ -378,6 +390,8 @@ export function Layout() {
 
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
     const recognition = new SpeechRecognition();
+    let microphoneBlocked = false;
+    let cancelled = false;
     recognition.continuous = true;
     recognition.interimResults = false;
     recognition.maxAlternatives = 3;
@@ -424,8 +438,20 @@ export function Layout() {
     recognition.onerror = (event: any) => {
       emitDiagnostic("voice_error", { error: event?.error || "unknown" });
       setVoiceListening(false);
+
+      const blocked =
+        event?.error === "not-allowed" ||
+        event?.error === "service-not-allowed";
+      if (blocked) {
+        microphoneBlocked = true;
+        emitDiagnostic("voice_permission_blocked");
+        toast.error("Microphone permission is blocked. Please allow it in app settings.");
+        return;
+      }
+
       setTimeout(() => {
         try {
+          if (microphoneBlocked || cancelled) return;
           recognition.start();
           setVoiceListening(true);
           emitDiagnostic("voice_restart");
@@ -440,6 +466,7 @@ export function Layout() {
       setVoiceListening(false);
       setTimeout(() => {
         try {
+          if (microphoneBlocked || cancelled) return;
           recognition.start();
           setVoiceListening(true);
           emitDiagnostic("voice_restart");
@@ -449,16 +476,31 @@ export function Layout() {
       }, 1000);
     };
 
-    try {
-      recognition.start();
-      setVoiceListening(true);
-      emitDiagnostic("voice_started");
-    } catch {
-      emitDiagnostic("voice_start_failed");
-    }
+    const startVoiceRecognition = async () => {
+      const hasMicrophone = await ensureMicrophoneAccess();
+      if (cancelled) return;
+
+      if (!hasMicrophone) {
+        microphoneBlocked = true;
+        emitDiagnostic("voice_mic_denied");
+        setVoiceListening(false);
+        return;
+      }
+
+      try {
+        recognition.start();
+        setVoiceListening(true);
+        emitDiagnostic("voice_started");
+      } catch {
+        emitDiagnostic("voice_start_failed");
+      }
+    };
+
+    void startVoiceRecognition();
     recognitionRef.current = recognition;
 
     return () => {
+      cancelled = true;
       try {
         recognition.stop();
       } catch {
