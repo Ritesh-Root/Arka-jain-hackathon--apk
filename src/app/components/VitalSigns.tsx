@@ -1,12 +1,16 @@
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import { GlassCard } from "./GlassCard";
 import { loadProfile } from "../lib/storage";
-import { Camera, Send, AlertTriangle, CheckCircle, XCircle, Siren } from "lucide-react";
+import { Camera, Send, AlertTriangle, CheckCircle, XCircle, Siren, Pill, QrCode } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { Camera as CapCamera } from "@capacitor/camera";
+import QRCode from "qrcode";
 
 interface ScanTreatmentReport {
   severity: "critical" | "serious" | "moderate" | "minor";
   likelyInjuries: string[];
   immediateTreatment: string[];
+  medicines: string[];
   doNotDo: string[];
   escalation: string;
   summary: string;
@@ -32,6 +36,11 @@ function fallbackReport(): ScanTreatmentReport {
       "Check responsiveness and breathing",
       "Control visible bleeding with firm pressure using clean cloth",
       "Keep patient still and monitor airway until medical help arrives",
+    ],
+    medicines: [
+      "Paracetamol 500mg (for pain, if conscious and not allergic)",
+      "Sterile saline (to rinse open wounds)",
+      "Antiseptic (Povidone-iodine) for cleaning intact skin around wounds",
     ],
     doNotDo: [
       "Do not move neck/spine if major trauma is suspected",
@@ -59,6 +68,7 @@ function normalizeReport(raw: any): ScanTreatmentReport {
     severity: safeSeverity,
     likelyInjuries: Array.isArray(raw?.likelyInjuries) ? raw.likelyInjuries : [],
     immediateTreatment: Array.isArray(raw?.immediateTreatment) ? raw.immediateTreatment : [],
+    medicines: Array.isArray(raw?.medicines) ? raw.medicines : [],
     doNotDo: Array.isArray(raw?.doNotDo) ? raw.doNotDo : [],
     escalation: typeof raw?.escalation === "string" ? raw.escalation : "Call emergency services if condition worsens.",
     summary: typeof raw?.summary === "string" ? raw.summary : "AI scan completed.",
@@ -70,12 +80,14 @@ export function VitalSigns() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const [cameraActive, setCameraActive] = useState(false);
+  const [wantsCamera, setWantsCamera] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [report, setReport] = useState<ScanTreatmentReport | null>(null);
   const [errorText, setErrorText] = useState("");
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  const [qrPayload, setQrPayload] = useState<string>("");
 
   const waitForVideoFrame = useCallback(async (video: HTMLVideoElement) => {
     if (video.readyState >= 3 && video.videoWidth > 0 && video.videoHeight > 0) return true;
@@ -125,60 +137,111 @@ export function VitalSigns() {
     return waitForVideoFrame(videoRef.current);
   }, [waitForVideoFrame]);
 
-  const startCamera = useCallback(async () => {
+  const handleOpenCamera = useCallback(() => {
     setErrorText("");
-    setCameraReady(false);
     setCapturedImage(null);
     setReport(null);
-    releaseStream();
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setErrorText("Camera API is not supported on this device/browser.");
-      return;
-    }
-
-    const streamAttempts: MediaStreamConstraints[] = [
-      {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-      },
-      { video: { facingMode: "environment" } },
-      { video: true },
-    ];
-
-    for (const constraints of streamAttempts) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        const ready = await attachStreamToVideo(stream);
-        if (ready) {
-          streamRef.current = stream;
-          setCameraReady(true);
-          setCameraActive(true);
-          return;
-        }
-
-        stream.getTracks().forEach((track) => track.stop());
-        if (videoRef.current) {
-          videoRef.current.srcObject = null;
-        }
-      } catch {
-        // Try the next constraint set.
-      }
-    }
-
-    setCameraActive(false);
-    setCameraReady(false);
-    setErrorText("Could not start a usable camera stream. Allow camera access and close other camera apps, then retry.");
-  }, [attachStreamToVideo, releaseStream]);
+    setWantsCamera(true);
+  }, []);
 
   const stopCamera = useCallback(() => {
     releaseStream();
     setCameraReady(false);
-    setCameraActive(false);
+    setWantsCamera(false);
   }, [releaseStream]);
+
+  // When the user wants the camera on, the <video> element is mounted by the
+  // JSX below. Only after that mount can we attach a MediaStream to its ref.
+  // Doing this in an effect (instead of the click handler) avoids the
+  // chicken-and-egg deadlock where videoRef.current is null at attach time.
+  useEffect(() => {
+    if (!wantsCamera) return;
+
+    let cancelled = false;
+
+    const start = async () => {
+      setErrorText("");
+      setCameraReady(false);
+      releaseStream();
+
+      // On Android (Capacitor), the WebView's getUserMedia is gated on the
+      // host app holding the runtime CAMERA permission. Trigger the system
+      // dialog via @capacitor/camera before attempting to open the stream.
+      if (Capacitor.isNativePlatform()) {
+        try {
+          const status = await CapCamera.requestPermissions({ permissions: ["camera"] });
+          if (cancelled) return;
+          if (status.camera !== "granted" && status.camera !== "limited") {
+            setErrorText("Camera permission denied. Enable it in app settings and try again.");
+            setWantsCamera(false);
+            return;
+          }
+        } catch {
+          if (cancelled) return;
+          setErrorText("Could not request camera permission on this device.");
+          setWantsCamera(false);
+          return;
+        }
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setErrorText("Camera API is not supported on this device/browser.");
+        setWantsCamera(false);
+        return;
+      }
+
+      const streamAttempts: MediaStreamConstraints[] = [
+        {
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        },
+        { video: { facingMode: "environment" } },
+        { video: true },
+      ];
+
+      for (const constraints of streamAttempts) {
+        if (cancelled) return;
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (cancelled) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          const ready = await attachStreamToVideo(stream);
+          if (cancelled) {
+            stream.getTracks().forEach((track) => track.stop());
+            return;
+          }
+          if (ready) {
+            streamRef.current = stream;
+            setCameraReady(true);
+            return;
+          }
+
+          stream.getTracks().forEach((track) => track.stop());
+          if (videoRef.current) {
+            videoRef.current.srcObject = null;
+          }
+        } catch {
+          // Try the next constraint set.
+        }
+      }
+
+      if (cancelled) return;
+      setCameraReady(false);
+      setWantsCamera(false);
+      setErrorText("Could not start a usable camera stream. Allow camera access and close other camera apps, then retry.");
+    };
+
+    void start();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsCamera, attachStreamToVideo, releaseStream]);
 
   const scanPatient = useCallback(async () => {
     if (!videoRef.current) return;
@@ -227,7 +290,7 @@ export function VitalSigns() {
               {
                 role: "system",
                 content:
-                  "You are an emergency first-aid assistant. Analyze injury visuals cautiously and return strict JSON only with keys: severity, likelyInjuries, immediateTreatment, doNotDo, escalation, summary. Keep steps practical and short. Never claim diagnosis certainty.",
+                  "You are an emergency first-aid assistant. Analyze injury visuals cautiously and return strict JSON only with keys: severity, likelyInjuries, immediateTreatment, medicines, doNotDo, escalation, summary. The 'medicines' key MUST be an array of short strings naming common over-the-counter or first-aid medicines that could help (e.g. 'Paracetamol 500mg for pain', 'Antiseptic for wound cleaning'), each with a brief usage note. Respect any allergies provided in the patient context and never recommend a medicine the patient is allergic to. Keep steps practical and short. Never claim diagnosis certainty.",
               },
               {
                 role: "user",
@@ -281,6 +344,57 @@ export function VitalSigns() {
     };
   }, [releaseStream]);
 
+  // Generate a fresh QR code each time a new AI report arrives. The QR encodes
+  // a human-readable summary of the patient's symptoms (likely injuries) and
+  // the recommended medicines so any third party with a QR scanner can read it
+  // without needing the app installed.
+  useEffect(() => {
+    if (!report) {
+      setQrDataUrl("");
+      setQrPayload("");
+      return;
+    }
+
+    const lines: string[] = [
+      "JEEVAN RAKSHAK - PATIENT TREATMENT",
+      `Patient: ${profile.fullName || "Unknown"}${profile.age ? `, age ${profile.age}` : ""}`,
+      `Blood Type: ${profile.bloodType || "Unknown"}`,
+      `Severity: ${report.severity.toUpperCase()}`,
+      "",
+      "SYMPTOMS:",
+      ...(report.likelyInjuries.length
+        ? report.likelyInjuries.map((s) => `- ${s}`)
+        : ["- (none reported)"]),
+      "",
+      "MEDICINES:",
+      ...(report.medicines.length
+        ? report.medicines.map((m) => `- ${m}`)
+        : ["- (none recommended)"]),
+      "",
+      `Issued: ${new Date().toLocaleString()}`,
+    ];
+    const payload = lines.join("\n");
+    setQrPayload(payload);
+
+    let cancelled = false;
+    QRCode.toDataURL(payload, {
+      width: 320,
+      margin: 2,
+      errorCorrectionLevel: "M",
+      color: { dark: "#1e1b4b", light: "#ffffff" },
+    })
+      .then((url) => {
+        if (!cancelled) setQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setQrDataUrl("");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [report, profile.fullName, profile.age, profile.bloodType]);
+
   const severityColor: Record<ScanTreatmentReport["severity"], string> = {
     critical: "from-[#ef4444] to-[#dc2626]",
     serious: "from-[#f97316] to-[#ea580c]",
@@ -296,9 +410,9 @@ export function VitalSigns() {
         <p className="text-sm text-[#6b7280] mt-1">Scan an injured person and get immediate AI treatment guidance</p>
       </div>
 
-      {!cameraActive ? (
+      {!wantsCamera ? (
         <GlassCard className="p-8">
-          <button onClick={startCamera} className="w-full flex flex-col items-center gap-4">
+          <button onClick={handleOpenCamera} className="w-full flex flex-col items-center gap-4">
             <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-[#f472b6] to-[#ec4899] flex items-center justify-center">
               <Camera size={40} className="text-white" />
             </div>
@@ -384,6 +498,23 @@ export function VitalSigns() {
             ))}
           </GlassCard>
 
+          {report.medicines.length > 0 && (
+            <GlassCard className="p-5 space-y-2">
+              <h3 className="text-[#7c3aed] flex items-center gap-2">
+                <Pill size={18} /> Recommended Medicines
+              </h3>
+              <p className="text-xs text-[#6b7280]">
+                Suggested over-the-counter / first-aid medicines. Confirm with a clinician before administering.
+              </p>
+              {report.medicines.map((med, index) => (
+                <div key={`${med}-${index}`} className="flex gap-2 text-sm text-[#374151]">
+                  <Pill size={14} className="shrink-0 mt-0.5 text-[#7c3aed]" />
+                  <span>{med}</span>
+                </div>
+              ))}
+            </GlassCard>
+          )}
+
           <GlassCard className="p-5 space-y-2">
             <h3 className="text-[#ef4444] flex items-center gap-2">
               <XCircle size={18} /> Do Not Do
@@ -400,6 +531,34 @@ export function VitalSigns() {
             <h3 className="text-[#1e1b4b] mb-2">Escalation Advice</h3>
             <p className="text-sm text-[#4b5563]">{report.escalation}</p>
           </GlassCard>
+
+          {qrDataUrl && (
+            <GlassCard className="p-5 flex flex-col items-center space-y-3">
+              <div className="flex items-center gap-2 text-[#7c3aed]">
+                <QrCode size={20} />
+                <h3 className="text-[#1e1b4b]">Treatment QR</h3>
+              </div>
+              <p className="text-center text-xs text-[#6b7280]">
+                Scan with any QR reader to share the patient's symptoms and recommended medicines with paramedics or hospital staff.
+              </p>
+              <div className="bg-white p-4 rounded-3xl shadow-inner">
+                <img
+                  src={qrDataUrl}
+                  alt="Patient symptoms and medicines QR code"
+                  className="w-64 h-64"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  if (!qrPayload) return;
+                  navigator.clipboard?.writeText(qrPayload).catch(() => {});
+                }}
+                className="text-xs text-[#7c3aed] underline"
+              >
+                Copy QR text
+              </button>
+            </GlassCard>
+          )}
 
           <button
             onClick={() => window.location.assign("tel:112")}
