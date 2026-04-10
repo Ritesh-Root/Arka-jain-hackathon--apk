@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router";
-import { Home, QrCode, Map, Camera, Mic, Settings } from "lucide-react";
+import { Home, QrCode, Map, Camera, Mic, Settings, X } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { SOSActive } from "./SOSActive";
 import {
@@ -245,6 +245,13 @@ export function Layout() {
     syncBackgroundProtection,
   ]);
 
+  const skipPermissionSetup = useCallback(() => {
+    localStorage.setItem(PERMISSION_SETUP_KEY, "skipped");
+    setPermissionSetupOpen(false);
+    setPermissionError("");
+    toast("Permission setup skipped. You can allow permissions later from phone settings.");
+  }, []);
+
   useEffect(() => {
     const handleSettingsUpdated = () => setSettings(loadSettings());
     window.addEventListener(SETTINGS_UPDATED_EVENT, handleSettingsUpdated);
@@ -303,7 +310,8 @@ export function Layout() {
 
   useEffect(() => {
     if (!onboardingOpen && isOnboardingCompleted()) {
-      const permissionDone = localStorage.getItem(PERMISSION_SETUP_KEY) === "true";
+      const permissionState = localStorage.getItem(PERMISSION_SETUP_KEY);
+      const permissionDone = permissionState === "true" || permissionState === "skipped";
       if (!permissionDone) {
         setPermissionSetupOpen(true);
         return;
@@ -473,6 +481,15 @@ export function Layout() {
         return (
           <div className="fixed inset-0 z-[125] bg-[#1e1b4b]/55 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-white/40">
+              <div className="flex justify-end">
+                <button
+                  onClick={skipPermissionSetup}
+                  className="w-8 h-8 rounded-full border border-[#e9d5ff] text-[#7c3aed] flex items-center justify-center"
+                  aria-label="Close permissions dialog"
+                >
+                  <X size={14} />
+                </button>
+              </div>
               <p className="text-sm text-[#7c3aed]/80">Permissions Setup ({permissionStepIndex + 1}/{permissionSteps.length})</p>
               <h2 className="text-[#1e1b4b] mt-1">{current?.title}</h2>
               <p className="text-sm text-[#6b7280] mt-1">{current?.description}</p>
@@ -507,6 +524,14 @@ export function Layout() {
                   Open App Settings
                 </button>
               )}
+
+              <button
+                onClick={skipPermissionSetup}
+                disabled={permissionBusy}
+                className="mt-2 w-full py-3 rounded-2xl bg-white border border-[#e5e7eb] text-[#6b7280] disabled:opacity-60"
+              >
+                Skip for now
+              </button>
 
               {Capacitor.getPlatform() === "android" && (
                 <p className="text-[11px] text-[#6b7280] mt-3">
