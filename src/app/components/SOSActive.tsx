@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { loadProfile, getEmergencyDialTargets, PRIMARY_EMERGENCY_NUMBER } from "../lib/storage";
 import { getNearestHospitals } from "../lib/hospitals";
+import { ARKA_JAIN_JAMSHEDPUR_COORDS, ARKA_JAIN_JAMSHEDPUR_LABEL } from "../lib/location";
 import { Phone, MapPin, Mic, X, ChevronRight, MessageSquare, Droplets } from "lucide-react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -14,7 +15,10 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
   const callTargets = useMemo(() => getEmergencyDialTargets(profile), [profile]);
   const navigate = useNavigate();
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [nearestHospitals, setNearestHospitals] = useState<ReturnType<typeof getNearestHospitals>>([]);
+  const [nearestHospitals, setNearestHospitals] = useState<ReturnType<typeof getNearestHospitals>>(
+    getNearestHospitals(ARKA_JAIN_JAMSHEDPUR_COORDS.lat, ARKA_JAIN_JAMSHEDPUR_COORDS.lng)
+  );
+  const [usingFallbackLocation, setUsingFallbackLocation] = useState(false);
   const [currentContactIndex, setCurrentContactIndex] = useState(0);
   const [callStatus, setCallStatus] = useState<string>("Preparing emergency dispatch...");
   const [smsStatus, setSmsStatus] = useState<string>("Waiting for location lock...");
@@ -25,16 +29,19 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const hasStartedCallsRef = useRef(false);
   const hasTriggeredSmsRef = useRef(false);
+  const activeCoords = coords ?? ARKA_JAIN_JAMSHEDPUR_COORDS;
 
   useEffect(() => {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setUsingFallbackLocation(false);
         setCoords(c);
         setNearestHospitals(getNearestHospitals(c.lat, c.lng));
       },
       () => {
-        const c = { lat: 22.8046, lng: 86.2030 };
+        const c = { lat: ARKA_JAIN_JAMSHEDPUR_COORDS.lat, lng: ARKA_JAIN_JAMSHEDPUR_COORDS.lng };
+        setUsingFallbackLocation(true);
         setCoords(c);
         setNearestHospitals(getNearestHospitals(c.lat, c.lng));
       },
@@ -202,10 +209,9 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
 
   const sendWhatsApp = (phone: string) => {
     if (!coords) {
-      toast.error("Location not locked yet. Please wait and try WhatsApp again.");
-      return;
+      toast.info("Using Arka Jain fallback location while live GPS is locking.");
     }
-    const msg = encodeURIComponent(`EMERGENCY! ${profile.fullName} needs help. Location: https://maps.google.com/?q=${coords?.lat},${coords?.lng}`);
+    const msg = encodeURIComponent(`EMERGENCY! ${profile.fullName} needs help. Location: https://maps.google.com/?q=${activeCoords.lat},${activeCoords.lng}`);
     window.open(`https://wa.me/${phone.replace(/\+/g, "")}?text=${msg}`, "_blank");
   };
 
@@ -222,10 +228,9 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
 
   const sendSmsNow = () => {
     if (!coords) {
-      setSmsStatus("Waiting for GPS lock before SMS.");
-      return;
+      setSmsStatus(`Live GPS pending. Using fallback location: ${ARKA_JAIN_JAMSHEDPUR_LABEL}.`);
     }
-    openEmergencySmsComposer(coords.lat, coords.lng);
+    openEmergencySmsComposer(activeCoords.lat, activeCoords.lng);
   };
 
   const deactivate = () => {
@@ -276,9 +281,10 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
           <div className="bg-white/15 backdrop-blur-xl rounded-3xl p-4 border border-white/10">
             <div className="flex items-center gap-2">
               <MapPin size={18} />
-              <span>Location Locked</span>
+              <span>{usingFallbackLocation ? "Fallback Location" : "Location Locked"}</span>
             </div>
             <p className="text-sm opacity-60 mt-1 tabular-nums">{coords.lat.toFixed(4)}, {coords.lng.toFixed(4)}</p>
+            {usingFallbackLocation && <p className="text-xs opacity-60 mt-1">{ARKA_JAIN_JAMSHEDPUR_LABEL}</p>}
           </div>
         )}
 

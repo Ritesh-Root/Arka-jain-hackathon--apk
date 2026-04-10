@@ -100,55 +100,7 @@ export function VitalSigns() {
     return video.readyState >= 3 && video.videoWidth > 0 && video.videoHeight > 0;
   }, []);
 
-  const startCamera = useCallback(async () => {
-    setErrorText("");
-    setCameraReady(false);
-    setCapturedImage(null);
-    setReport(null);
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setErrorText("Camera API is not supported on this device/browser.");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute("playsinline", "true");
-        await videoRef.current.play();
-        const ready = await waitForVideoFrame(videoRef.current);
-        setCameraReady(ready);
-        if (!ready) {
-          setErrorText("Camera is initializing. Please wait a moment and try scan again.");
-        }
-      }
-      setCameraActive(true);
-    } catch {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.setAttribute("playsinline", "true");
-          await videoRef.current.play();
-          const ready = await waitForVideoFrame(videoRef.current);
-          setCameraReady(ready);
-          if (!ready) {
-            setErrorText("Camera is initializing. Please wait a moment and try scan again.");
-          }
-        }
-        setCameraActive(true);
-      } catch {
-        setErrorText("Camera permission is required to scan the patient.");
-      }
-    }
-  }, [waitForVideoFrame]);
-
-  const stopCamera = useCallback(() => {
+  const releaseStream = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -156,9 +108,77 @@ export function VitalSigns() {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+  }, []);
+
+  const attachStreamToVideo = useCallback(async (stream: MediaStream) => {
+    if (!videoRef.current) return false;
+    videoRef.current.srcObject = stream;
+    videoRef.current.setAttribute("playsinline", "true");
+    videoRef.current.muted = true;
+
+    try {
+      await videoRef.current.play();
+    } catch {
+      return false;
+    }
+
+    return waitForVideoFrame(videoRef.current);
+  }, [waitForVideoFrame]);
+
+  const startCamera = useCallback(async () => {
+    setErrorText("");
+    setCameraReady(false);
+    setCapturedImage(null);
+    setReport(null);
+    releaseStream();
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setErrorText("Camera API is not supported on this device/browser.");
+      return;
+    }
+
+    const streamAttempts: MediaStreamConstraints[] = [
+      {
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      },
+      { video: { facingMode: "environment" } },
+      { video: true },
+    ];
+
+    for (const constraints of streamAttempts) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const ready = await attachStreamToVideo(stream);
+        if (ready) {
+          streamRef.current = stream;
+          setCameraReady(true);
+          setCameraActive(true);
+          return;
+        }
+
+        stream.getTracks().forEach((track) => track.stop());
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+        }
+      } catch {
+        // Try the next constraint set.
+      }
+    }
+
+    setCameraActive(false);
+    setCameraReady(false);
+    setErrorText("Could not start a usable camera stream. Allow camera access and close other camera apps, then retry.");
+  }, [attachStreamToVideo, releaseStream]);
+
+  const stopCamera = useCallback(() => {
+    releaseStream();
     setCameraReady(false);
     setCameraActive(false);
-  }, []);
+  }, [releaseStream]);
 
   const scanPatient = useCallback(async () => {
     if (!videoRef.current) return;
@@ -257,15 +277,9 @@ export function VitalSigns() {
 
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
+      releaseStream();
     };
-  }, []);
+  }, [releaseStream]);
 
   const severityColor: Record<ScanTreatmentReport["severity"], string> = {
     critical: "from-[#ef4444] to-[#dc2626]",

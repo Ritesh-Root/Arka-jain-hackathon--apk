@@ -75,53 +75,79 @@ export function EyeWitness() {
     return video.readyState >= 3 && video.videoWidth > 0 && video.videoHeight > 0;
   }, []);
 
+  const releaseStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const attachStreamToVideo = useCallback(async (stream: MediaStream) => {
+    if (!videoRef.current) return false;
+    videoRef.current.srcObject = stream;
+    videoRef.current.setAttribute("playsinline", "true");
+    videoRef.current.muted = true;
+
+    try {
+      await videoRef.current.play();
+    } catch {
+      return false;
+    }
+
+    return waitForVideoFrame(videoRef.current);
+  }, [waitForVideoFrame]);
+
   const startCamera = useCallback(async () => {
     setErrorText("");
     setCameraReady(false);
     setCapturedImage(null);
     setReport(null);
+    releaseStream();
 
     if (!navigator.mediaDevices?.getUserMedia) {
       setErrorText("Camera API is not supported on this device/browser.");
       return;
     }
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute("playsinline", "true");
-        await videoRef.current.play();
-        const ready = await waitForVideoFrame(videoRef.current);
-        setCameraReady(ready);
-        if (!ready) {
-          setErrorText("Camera is initializing. Please wait a moment and try capture again.");
-        }
-      }
-      setCameraActive(true);
-    } catch {
+    const streamAttempts: MediaStreamConstraints[] = [
+      {
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      },
+      { video: { facingMode: "environment" } },
+      { video: true },
+    ];
+
+    for (const constraints of streamAttempts) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.setAttribute("playsinline", "true");
-          await videoRef.current.play();
-          const ready = await waitForVideoFrame(videoRef.current);
-          setCameraReady(ready);
-          if (!ready) {
-            setErrorText("Camera is initializing. Please wait a moment and try capture again.");
-          }
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const ready = await attachStreamToVideo(stream);
+        if (ready) {
+          streamRef.current = stream;
+          setCameraReady(true);
+          setCameraActive(true);
+          return;
         }
-        setCameraActive(true);
+
+        stream.getTracks().forEach((track) => track.stop());
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+        }
       } catch {
-        setErrorText("Camera access denied. Please allow camera permissions.");
+        // Try the next constraint set.
       }
     }
-  }, [waitForVideoFrame]);
+
+    setCameraActive(false);
+    setCameraReady(false);
+    setErrorText("Could not start a usable camera stream. Allow camera access and close other camera apps, then retry.");
+  }, [attachStreamToVideo, releaseStream]);
 
   const captureScene = useCallback(async () => {
     if (!videoRef.current) return;
@@ -161,30 +187,18 @@ export function EyeWitness() {
     }, 2500);
   }, [waitForVideoFrame]);
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
+  const stopCamera = useCallback(() => {
+    releaseStream();
     setCameraReady(false);
     setCameraActive(false);
-  };
+  }, [releaseStream]);
 
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
+      releaseStream();
       speechSynthesis.cancel();
     };
-  }, []);
+  }, [releaseStream]);
 
   const speakReport = () => {
     if (report && "speechSynthesis" in window) {

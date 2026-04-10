@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useRef } from "react";
 import { GlassCard } from "./GlassCard";
 import { hospitals, haversineDistance, getNearestHospitals } from "../lib/hospitals";
+import { ARKA_JAIN_JAMSHEDPUR_COORDS } from "../lib/location";
 import { MapPin, Navigation, Bed, Clock, Phone } from "lucide-react";
 
 export function HospitalMap() {
   const mapRef = useRef<HTMLDivElement>(null);
-  const [coords, setCoords] = useState<{ lat: number; lng: number }>({ lat: 22.8046, lng: 86.2030 });
-  const [nearest, setNearest] = useState(getNearestHospitals(22.8046, 86.2030, 3));
+  const [coords, setCoords] = useState<{ lat: number; lng: number }>(ARKA_JAIN_JAMSHEDPUR_COORDS);
+  const [nearest, setNearest] = useState(getNearestHospitals(ARKA_JAIN_JAMSHEDPUR_COORDS.lat, ARKA_JAIN_JAMSHEDPUR_COORDS.lng, 3));
   const [mapLoaded, setMapLoaded] = useState(false);
   const leafletMapRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
