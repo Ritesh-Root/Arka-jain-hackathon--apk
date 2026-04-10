@@ -2,18 +2,18 @@ import React from "react";
 import { useNavigate } from "react-router";
 import { loadProfile } from "../lib/storage";
 import { GlassCard } from "./GlassCard";
-import { QrCode, Map, Camera, Heart, User, Bot, Shield, AlertTriangle, ChevronRight, Droplets } from "lucide-react";
+import { QrCode, Map, Camera, User, Bot, Shield, AlertTriangle, ChevronRight, Droplets } from "lucide-react";
 
 export function Home() {
   const navigate = useNavigate();
   const profile = loadProfile();
 
   const features = [
-    { icon: User, label: "Profile", desc: "Emergency medical card", path: "/profile", gradient: "from-[#a78bfa] to-[#7c3aed]" },
+    { icon: User, label: "Settings", desc: "Profile and SOS settings", path: "/profile", gradient: "from-[#a78bfa] to-[#7c3aed]" },
     { icon: QrCode, label: "QR Code", desc: "Lockscreen bystander QR", path: "/qr", gradient: "from-[#818cf8] to-[#6366f1]" },
     { icon: Map, label: "Hospitals", desc: "Live hospital map", path: "/hospitals", gradient: "from-[#34d399] to-[#059669]" },
     { icon: Camera, label: "Eye Witness", desc: "AI scene reporter", path: "/witness", gradient: "from-[#fb923c] to-[#ea580c]" },
-    { icon: Heart, label: "Vitals", desc: "Heart rate from selfie", path: "/vitals", gradient: "from-[#f472b6] to-[#ec4899]" },
+    { icon: Camera, label: "Scan Patient", desc: "AI injury scan + treatment", path: "/scan", gradient: "from-[#f472b6] to-[#ec4899]" },
     { icon: Bot, label: "AI Copilot", desc: "First-aid voice guide", path: "/copilot", gradient: "from-[#67e8f9] to-[#06b6d4]" },
   ];
 
@@ -59,7 +59,7 @@ export function Home() {
           <AlertTriangle size={16} className="text-amber-600" />
         </div>
         <p className="text-sm text-[#1e1b4b]/70">
-          Say <span className="text-[#7c3aed]">"SOS SOS SOS"</span>, triple-tap, or shake phone repeatedly for emergency
+          Say <span className="text-[#7c3aed]">"SOS SOS SOS"</span>, <span className="text-[#7c3aed]">"Help Help Help"</span>, or <span className="text-[#7c3aed]">"Bachao Bachao Bachao"</span>
         </p>
       </div>
 
@@ -90,7 +90,7 @@ export function Home() {
             "Voice-activate SOS for instant help",
             "AI locates nearest hospitals with live beds",
             "AI Eye Witness reports to ambulance crews",
-            "Monitor vitals with selfie rPPG technology",
+            "Scan injured patient and get AI treatment steps",
           ].map((step, i) => (
             <div key={i} className="flex items-start gap-3">
               <span className="w-6 h-6 rounded-full bg-gradient-to-br from-[#a78bfa] to-[#7c3aed] text-white text-xs flex items-center justify-center shrink-0 mt-0.5">

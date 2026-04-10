@@ -1,9 +1,9 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 
 interface HotwordServicePlugin {
-  start(options: { emergencyNumber: string; contactNumbers: string[] }): Promise<void>;
+  start(options: { emergencyNumber: string; contactNumbers: string[]; shakeEnabled: boolean }): Promise<void>;
   stop(): Promise<void>;
-  syncConfig(options: { emergencyNumber: string; contactNumbers: string[] }): Promise<void>;
+  syncConfig(options: { emergencyNumber: string; contactNumbers: string[]; shakeEnabled: boolean }): Promise<void>;
   status(): Promise<{ running: boolean }>;
 }
 
@@ -13,14 +13,22 @@ function isAndroidNative(): boolean {
   return Capacitor.getPlatform() === "android";
 }
 
-export async function enableAndroidBackgroundProtection(emergencyNumber: string, contactNumbers: string[]) {
+export async function enableAndroidBackgroundProtection(
+  emergencyNumber: string,
+  contactNumbers: string[],
+  shakeEnabled: boolean
+) {
   if (!isAndroidNative()) return;
-  await HotwordService.start({ emergencyNumber, contactNumbers });
+  await HotwordService.start({ emergencyNumber, contactNumbers, shakeEnabled });
 }
 
-export async function syncAndroidEmergencyConfig(emergencyNumber: string, contactNumbers: string[]) {
+export async function syncAndroidEmergencyConfig(
+  emergencyNumber: string,
+  contactNumbers: string[],
+  shakeEnabled: boolean
+) {
   if (!isAndroidNative()) return;
-  await HotwordService.syncConfig({ emergencyNumber, contactNumbers });
+  await HotwordService.syncConfig({ emergencyNumber, contactNumbers, shakeEnabled });
 }
 
 export async function stopAndroidBackgroundProtection() {

@@ -48,6 +48,7 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
 
     public static final String EXTRA_EMERGENCY_NUMBER = "extra_emergency_number";
     public static final String EXTRA_CONTACT_NUMBERS_CSV = "extra_contact_numbers_csv";
+    public static final String EXTRA_SHAKE_ENABLED = "extra_shake_enabled";
 
     private static final String CHANNEL_ID = "jr_hotword_guard_channel";
     private static final int NOTIFICATION_ID = 2026;
@@ -56,7 +57,10 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final List<Long> detections = new ArrayList<>();
     private final List<Long> shakeDetections = new ArrayList<>();
-    private final Pattern hotwordPattern = Pattern.compile("\\b(sos|help|bachao|बचाओ)\\b", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private final Pattern hotwordPattern = Pattern.compile(
+        "\\b(sos|help|bachao|बचाओ|madad|मदद|emergency)\\b",
+        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
+    );
 
     private SpeechRecognizer speechRecognizer;
     private Intent speechIntent;
@@ -66,6 +70,7 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
     private ToneGenerator toneGenerator;
     private long lastShakeSampleAt = 0L;
     private long lastEmergencyTriggerAt = 0L;
+    private boolean shakeEnabled = EmergencyConfigStore.DEFAULT_SHAKE_ENABLED;
 
     private final Runnable restartListening = this::startListeningSafely;
 
@@ -88,10 +93,19 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
         if (intent != null) {
             String emergencyNumber = intent.getStringExtra(EXTRA_EMERGENCY_NUMBER);
             String contactNumbersCsv = intent.getStringExtra(EXTRA_CONTACT_NUMBERS_CSV);
-            EmergencyConfigStore.saveConfig(this, emergencyNumber, contactNumbersCsv);
+            boolean nextShakeEnabled = intent.hasExtra(EXTRA_SHAKE_ENABLED)
+                ? intent.getBooleanExtra(EXTRA_SHAKE_ENABLED, EmergencyConfigStore.DEFAULT_SHAKE_ENABLED)
+                : EmergencyConfigStore.isShakeEnabled(this);
+            EmergencyConfigStore.saveConfig(this, emergencyNumber, contactNumbersCsv, nextShakeEnabled);
+            shakeEnabled = nextShakeEnabled;
+        } else {
+            shakeEnabled = EmergencyConfigStore.isShakeEnabled(this);
         }
 
-        updateNotification("Listening for SOS / help / bachao and repeated shakes");
+        updateNotification(
+            "Listening for SOS / help / bachao / madad"
+                + (shakeEnabled ? " and repeated shakes" : " (shake trigger off)")
+        );
         startListeningSafely();
         return START_STICKY;
     }
@@ -430,6 +444,10 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
     @Override
     public void onSensorChanged(SensorEvent event) {
         if (event == null || event.sensor == null || event.sensor.getType() != Sensor.TYPE_ACCELEROMETER) {
+            return;
+        }
+
+        if (!shakeEnabled) {
             return;
         }
 

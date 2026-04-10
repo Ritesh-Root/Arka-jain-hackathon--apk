@@ -1,17 +1,40 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router";
-import { Home, QrCode, Map, Heart, Mic } from "lucide-react";
+import { Home, QrCode, Map, Camera, Mic, Settings } from "lucide-react";
 import { SOSActive } from "./SOSActive";
-import { loadProfile, saveProfile, isOnboardingCompleted, markOnboardingCompleted, PRIMARY_EMERGENCY_NUMBER } from "../lib/storage";
+import {
+  loadProfile,
+  saveProfile,
+  loadSettings,
+  isOnboardingCompleted,
+  markOnboardingCompleted,
+  PRIMARY_EMERGENCY_NUMBER,
+  SETTINGS_UPDATED_EVENT,
+} from "../lib/storage";
 import { enableAndroidBackgroundProtection, syncAndroidEmergencyConfig } from "../lib/androidHotword";
 import { toast } from "sonner";
+
+const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+
+function splitCsv(text: string): string[] {
+  return text
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
 
 export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [sosActive, setSosActive] = useState(false);
   const [voiceListening, setVoiceListening] = useState(false);
+  const [settings, setSettings] = useState(() => loadSettings());
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [setupName, setSetupName] = useState("");
+  const [setupAge, setSetupAge] = useState("");
+  const [setupBloodType, setSetupBloodType] = useState("");
+  const [setupConditions, setSetupConditions] = useState("");
+  const [setupAllergies, setSetupAllergies] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactRelationship, setContactRelationship] = useState("Family");
   const [contactPhone, setContactPhone] = useState("");
@@ -21,11 +44,20 @@ export function Layout() {
 
   const syncBackgroundProtection = useCallback(async () => {
     const profile = loadProfile();
+    const currentSettings = loadSettings();
     const contactNumbers = profile.emergencyContacts.map((contact) => contact.phone).filter(Boolean);
 
     try {
-      await syncAndroidEmergencyConfig(PRIMARY_EMERGENCY_NUMBER, contactNumbers);
-      await enableAndroidBackgroundProtection(PRIMARY_EMERGENCY_NUMBER, contactNumbers);
+      await syncAndroidEmergencyConfig(
+        PRIMARY_EMERGENCY_NUMBER,
+        contactNumbers,
+        currentSettings.shakeSOSEnabled
+      );
+      await enableAndroidBackgroundProtection(
+        PRIMARY_EMERGENCY_NUMBER,
+        contactNumbers,
+        currentSettings.shakeSOSEnabled
+      );
     } catch {
       toast.error("Allow microphone, call and SMS permissions for 24x7 Android protection.");
     }
@@ -37,33 +69,58 @@ export function Layout() {
   }, []);
 
   useEffect(() => {
+    const handleSettingsUpdated = () => setSettings(loadSettings());
+    window.addEventListener(SETTINGS_UPDATED_EVENT, handleSettingsUpdated);
+    return () => window.removeEventListener(SETTINGS_UPDATED_EVENT, handleSettingsUpdated);
+  }, []);
+
+  useEffect(() => {
     if (!isOnboardingCompleted()) {
+      const profile = loadProfile();
+      const firstContact = profile.emergencyContacts[0];
+      setSetupName(profile.fullName || "");
+      setSetupAge(profile.age ? String(profile.age) : "");
+      setSetupBloodType(profile.bloodType || "");
+      setSetupConditions(profile.conditions.join(", "));
+      setSetupAllergies(profile.allergies.join(", "));
+      setContactName(firstContact?.name || "");
+      setContactRelationship(firstContact?.relationship || "Family");
+      setContactPhone(firstContact?.phone || "");
       setOnboardingOpen(true);
     }
   }, []);
 
   const handleOnboardingSave = async () => {
-    if (!contactName.trim() || !contactPhone.trim()) {
-      toast.error("Please add contact name and phone number");
+    if (!setupName.trim() || !setupBloodType.trim() || !contactName.trim() || !contactPhone.trim()) {
+      toast.error("Please fill name, blood type, and primary emergency contact");
       return;
     }
 
     const profile = loadProfile();
+    const parsedAge = Number.parseInt(setupAge, 10);
     const newContact = {
       name: contactName.trim(),
       relationship: contactRelationship.trim() || "Emergency Contact",
       phone: contactPhone.trim(),
     };
 
+    const customConditions = splitCsv(setupConditions);
+    const customAllergies = splitCsv(setupAllergies);
+
     const updatedProfile = {
       ...profile,
+      fullName: setupName.trim(),
+      age: Number.isFinite(parsedAge) && parsedAge > 0 ? parsedAge : profile.age,
+      bloodType: setupBloodType,
+      conditions: customConditions.length ? customConditions : profile.conditions,
+      allergies: customAllergies.length ? customAllergies : profile.allergies,
       emergencyContacts: [newContact, ...profile.emergencyContacts].slice(0, 3),
     };
 
     saveProfile(updatedProfile);
     markOnboardingCompleted();
     setOnboardingOpen(false);
-    toast.success("Emergency contact saved");
+    toast.success("Profile setup saved");
     await syncBackgroundProtection();
   };
 
@@ -105,7 +162,7 @@ export function Layout() {
     recognition.lang = "en-IN";
 
     recognition.onresult = (event: any) => {
-      const keywordPattern = /\bsos\b|\bhelp\b|bachao|बचाओ/gi;
+      const keywordPattern = /\bsos\b|\bhelp\b|bachao|बचाओ|madad|मदद|emergency/gi;
       const now = Date.now();
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -149,6 +206,45 @@ export function Layout() {
     };
   }, [triggerSOS]);
 
+  useEffect(() => {
+    if (!settings.shakeSOSEnabled) {
+      return;
+    }
+
+    const shakeDetections: number[] = [];
+    let lastSampleAt = 0;
+
+    const onMotion = (event: DeviceMotionEvent) => {
+      const acc = event.accelerationIncludingGravity;
+      if (!acc) return;
+
+      const now = Date.now();
+      if (now - lastSampleAt < 300) return;
+
+      const x = (acc.x || 0) / 9.80665;
+      const y = (acc.y || 0) / 9.80665;
+      const z = (acc.z || 0) / 9.80665;
+      const gForce = Math.sqrt(x * x + y * y + z * z);
+
+      if (gForce < 2.7) return;
+
+      lastSampleAt = now;
+      shakeDetections.push(now);
+
+      while (shakeDetections.length && now - shakeDetections[0] > 4500) {
+        shakeDetections.shift();
+      }
+
+      if (shakeDetections.length >= 4) {
+        shakeDetections.length = 0;
+        triggerSOS();
+      }
+    };
+
+    window.addEventListener("devicemotion", onMotion);
+    return () => window.removeEventListener("devicemotion", onMotion);
+  }, [settings.shakeSOSEnabled, triggerSOS]);
+
   if (sosActive) {
     return <SOSActive onDeactivate={() => setSosActive(false)} />;
   }
@@ -157,7 +253,8 @@ export function Layout() {
     { icon: Home, label: "Home", path: "/" },
     { icon: QrCode, label: "QR", path: "/qr" },
     { icon: Map, label: "Map", path: "/hospitals" },
-    { icon: Heart, label: "Vitals", path: "/vitals" },
+    { icon: Camera, label: "Scan", path: "/scan" },
+    { icon: Settings, label: "Settings", path: "/profile" },
   ];
 
   return (
@@ -172,22 +269,61 @@ export function Layout() {
         <div className="fixed top-3 right-3 z-50 px-3 py-1.5 rounded-full bg-white/60 backdrop-blur-xl text-[#7c3aed] text-xs flex items-center gap-1.5 shadow-sm border border-white/40">
           <Mic size={12} />
           <div className="w-1.5 h-1.5 rounded-full bg-[#7c3aed] animate-pulse" />
-          Voice SOS/Help/Bachao
+          Voice SOS/Help/Bachao/Madad
         </div>
       )}
 
       {onboardingOpen && (
         <div className="fixed inset-0 z-[120] bg-[#1e1b4b]/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-white/40">
-            <p className="text-sm text-[#7c3aed]/80">First-time setup</p>
-            <h2 className="text-[#1e1b4b] mt-1">Who should we call in emergency?</h2>
-            <p className="text-sm text-[#6b7280] mt-1">Add the primary person to call when SOS is triggered.</p>
+          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-white/40 max-h-[90vh] overflow-y-auto">
+            <p className="text-sm text-[#7c3aed]/80">Account setup</p>
+            <h2 className="text-[#1e1b4b] mt-1">Complete your emergency profile</h2>
+            <p className="text-sm text-[#6b7280] mt-1">This will be saved and auto-loaded every time you open the app.</p>
 
             <div className="mt-4 space-y-3">
               <input
+                value={setupName}
+                onChange={(e) => setSetupName(e.target.value)}
+                placeholder="Your full name"
+                className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  value={setupAge}
+                  onChange={(e) => setSetupAge(e.target.value)}
+                  placeholder="Age"
+                  inputMode="numeric"
+                  className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+                />
+                <select
+                  value={setupBloodType}
+                  onChange={(e) => setSetupBloodType(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+                >
+                  <option value="">Blood type</option>
+                  {BLOOD_TYPES.map((bloodType) => (
+                    <option key={bloodType} value={bloodType}>
+                      {bloodType}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                value={setupConditions}
+                onChange={(e) => setSetupConditions(e.target.value)}
+                placeholder="Health conditions (comma separated)"
+                className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+              />
+              <input
+                value={setupAllergies}
+                onChange={(e) => setSetupAllergies(e.target.value)}
+                placeholder="Allergies (comma separated)"
+                className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+              />
+              <input
                 value={contactName}
                 onChange={(e) => setContactName(e.target.value)}
-                placeholder="Contact name"
+                placeholder="Primary emergency contact name"
                 className="w-full px-4 py-2.5 rounded-2xl border border-[#d8b4fe] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
               />
               <input
@@ -208,7 +344,7 @@ export function Layout() {
               onClick={handleOnboardingSave}
               className="mt-5 w-full py-3 rounded-2xl bg-gradient-to-r from-[#a78bfa] to-[#7c3aed] text-white"
             >
-              Save Emergency Contact
+              Save & Continue
             </button>
           </div>
         </div>

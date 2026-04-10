@@ -10,7 +10,14 @@ interface Message {
 }
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY ?? "";
+const HARDCODED_GROQ_API_KEY_PRIMARY = "";
+const HARDCODED_GROQ_API_KEY_BACKUP = "";
+const GROQ_API_KEYS = [
+  HARDCODED_GROQ_API_KEY_PRIMARY,
+  HARDCODED_GROQ_API_KEY_BACKUP,
+  import.meta.env.VITE_GROQ_API_KEY || "",
+  import.meta.env.VITE_GROQ_API_KEY_BACKUP || "",
+].filter((key) => !!key);
 const GROQ_MODEL = "llama-3.3-70b-versatile";
 
 function buildSystemPrompt(profile: ReturnType<typeof loadProfile>) {
@@ -127,8 +134,8 @@ export function Copilot() {
       setIsLoading(true);
 
       try {
-        if (!GROQ_API_KEY) {
-          const fallback = `${localFallback(profile, cleanText)}\n\n(Groq API key missing. Running in local emergency fallback mode.)`;
+        if (!GROQ_API_KEYS.length) {
+          const fallback = localFallback(profile, cleanText);
           updateAiMessage(aiMessageId, fallback);
           speak(fallback);
           return;
@@ -138,32 +145,37 @@ export function Copilot() {
           .slice(-10)
           .map((msg) => ({ role: msg.role === "ai" ? "assistant" : "user", content: msg.text }));
 
-        const response = await fetch(GROQ_API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${GROQ_API_KEY}`,
-          },
-          body: JSON.stringify({
-            model: GROQ_MODEL,
-            temperature: 0.2,
-            stream: true,
-            messages: [
-              { role: "system", content: buildSystemPrompt(profile) },
-              ...history,
-              { role: "user", content: cleanText },
-            ],
-          }),
-        });
+        let response: Response | null = null;
 
-        if (!response.ok) {
-          const errText = `Agent API error: ${response.status}. Check Groq API key/model.`;
-          updateAiMessage(aiMessageId, errText);
-          return;
+        for (const apiKey of GROQ_API_KEYS) {
+          const candidate = await fetch(GROQ_API_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: GROQ_MODEL,
+              temperature: 0.2,
+              stream: true,
+              messages: [
+                { role: "system", content: buildSystemPrompt(profile) },
+                ...history,
+                { role: "user", content: cleanText },
+              ],
+            }),
+          });
+
+          if (candidate.ok && candidate.body) {
+            response = candidate;
+            break;
+          }
         }
 
-        if (!response.body) {
-          updateAiMessage(aiMessageId, "No response body from AI provider.");
+        if (!response || !response.body) {
+          const fallback = localFallback(profile, cleanText);
+          updateAiMessage(aiMessageId, fallback);
+          speak(fallback);
           return;
         }
 
@@ -208,7 +220,7 @@ export function Copilot() {
 
         speak(fullText);
       } catch {
-        const fallback = `${localFallback(profile, cleanText)}\n\n(Network/API issue. Running in local emergency fallback mode.)`;
+        const fallback = localFallback(profile, cleanText);
         updateAiMessage(aiMessageId, fallback);
         speak(fallback);
       } finally {

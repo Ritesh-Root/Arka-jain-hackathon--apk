@@ -19,6 +19,7 @@ export const router = createBrowserRouter([
       { path: "qr", Component: QRCardPage },
       { path: "hospitals", Component: HospitalMap },
       { path: "witness", Component: EyeWitness },
+      { path: "scan", Component: VitalSigns },
       { path: "vitals", Component: VitalSigns },
       { path: "copilot", Component: Copilot },
     ],

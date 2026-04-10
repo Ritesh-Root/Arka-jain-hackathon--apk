@@ -32,16 +32,17 @@ public class HotwordPlugin extends Plugin {
     public void start(PluginCall call) {
         String emergencyNumber = call.getString("emergencyNumber", EmergencyConfigStore.DEFAULT_NUMBER);
         JSArray contacts = call.getArray("contactNumbers", new JSArray());
+        boolean shakeEnabled = call.getBoolean("shakeEnabled", EmergencyConfigStore.DEFAULT_SHAKE_ENABLED);
         String contactsCsv = contactsToCsv(contacts);
 
-        EmergencyConfigStore.saveConfig(getContext(), emergencyNumber, contactsCsv);
+        EmergencyConfigStore.saveConfig(getContext(), emergencyNumber, contactsCsv, shakeEnabled);
 
         if (!permissionsGranted()) {
             requestAllPermissions(call, "permissionsCallback");
             return;
         }
 
-        startHotwordService(emergencyNumber, contactsCsv);
+        startHotwordService(emergencyNumber, contactsCsv, shakeEnabled);
         call.resolve();
     }
 
@@ -56,9 +57,10 @@ public class HotwordPlugin extends Plugin {
     public void syncConfig(PluginCall call) {
         String emergencyNumber = call.getString("emergencyNumber", EmergencyConfigStore.DEFAULT_NUMBER);
         JSArray contacts = call.getArray("contactNumbers", new JSArray());
+        boolean shakeEnabled = call.getBoolean("shakeEnabled", EmergencyConfigStore.DEFAULT_SHAKE_ENABLED);
         String contactsCsv = contactsToCsv(contacts);
 
-        EmergencyConfigStore.saveConfig(getContext(), emergencyNumber, contactsCsv);
+        EmergencyConfigStore.saveConfig(getContext(), emergencyNumber, contactsCsv, shakeEnabled);
         call.resolve();
     }
 
@@ -78,8 +80,9 @@ public class HotwordPlugin extends Plugin {
 
         String emergencyNumber = call.getString("emergencyNumber", EmergencyConfigStore.DEFAULT_NUMBER);
         JSArray contacts = call.getArray("contactNumbers", new JSArray());
+        boolean shakeEnabled = call.getBoolean("shakeEnabled", EmergencyConfigStore.DEFAULT_SHAKE_ENABLED);
         String contactsCsv = contactsToCsv(contacts);
-        startHotwordService(emergencyNumber, contactsCsv);
+        startHotwordService(emergencyNumber, contactsCsv, shakeEnabled);
         call.resolve();
     }
 
@@ -89,10 +92,11 @@ public class HotwordPlugin extends Plugin {
             && getPermissionState("sms") == PermissionState.GRANTED;
     }
 
-    private void startHotwordService(String emergencyNumber, String contactsCsv) {
+    private void startHotwordService(String emergencyNumber, String contactsCsv, boolean shakeEnabled) {
         Intent intent = new Intent(getContext(), EmergencyHotwordService.class);
         intent.putExtra(EmergencyHotwordService.EXTRA_EMERGENCY_NUMBER, emergencyNumber);
         intent.putExtra(EmergencyHotwordService.EXTRA_CONTACT_NUMBERS_CSV, contactsCsv);
+        intent.putExtra(EmergencyHotwordService.EXTRA_SHAKE_ENABLED, shakeEnabled);
         ContextCompat.startForegroundService(getContext(), intent);
     }
 

@@ -14,15 +14,22 @@ public final class EmergencyConfigStore {
     private static final String PREFS = "jr_hotword_config";
     private static final String KEY_EMERGENCY_NUMBER = "emergency_number";
     private static final String KEY_CONTACTS_CSV = "contact_numbers_csv";
+    private static final String KEY_SHAKE_ENABLED = "shake_enabled";
     public static final String DEFAULT_NUMBER = "8210950528";
     public static final String SECONDARY_DEFAULT_NUMBER = "9304673802";
+    public static final boolean DEFAULT_SHAKE_ENABLED = false;
 
-    public static void saveConfig(Context context, String emergencyNumber, String contactsCsv) {
+    public static void saveConfig(Context context, String emergencyNumber, String contactsCsv, boolean shakeEnabled) {
         SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         preferences.edit()
             .putString(KEY_EMERGENCY_NUMBER, sanitizePhone(emergencyNumber))
             .putString(KEY_CONTACTS_CSV, contactsCsv == null ? "" : contactsCsv)
+            .putBoolean(KEY_SHAKE_ENABLED, shakeEnabled)
             .apply();
+    }
+
+    public static void saveConfig(Context context, String emergencyNumber, String contactsCsv) {
+        saveConfig(context, emergencyNumber, contactsCsv, DEFAULT_SHAKE_ENABLED);
     }
 
     public static String getPrimaryNumber(Context context) {
@@ -37,6 +44,11 @@ public final class EmergencyConfigStore {
     public static String getContactsCsv(Context context) {
         SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         return preferences.getString(KEY_CONTACTS_CSV, "");
+    }
+
+    public static boolean isShakeEnabled(Context context) {
+        SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        return preferences.getBoolean(KEY_SHAKE_ENABLED, DEFAULT_SHAKE_ENABLED);
     }
 
     public static List<String> getAllNumbers(Context context) {

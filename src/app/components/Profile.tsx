@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { loadProfile, saveProfile, MedicalProfile, PRIMARY_EMERGENCY_NUMBER } from "../lib/storage";
+import {
+  loadProfile,
+  saveProfile,
+  loadSettings,
+  saveSettings,
+  MedicalProfile,
+  PRIMARY_EMERGENCY_NUMBER,
+} from "../lib/storage";
 import { syncAndroidEmergencyConfig } from "../lib/androidHotword";
 import { GlassCard } from "./GlassCard";
-import { User, Heart, Pill, Phone, Save, Plus, X } from "lucide-react";
+import { User, Heart, Pill, Phone, Save, Plus, X, Siren } from "lucide-react";
 import { toast } from "sonner";
 
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
@@ -11,18 +18,27 @@ const COMMON_CONDITIONS = ["Hypertension", "Type 2 Diabetes", "Type 1 Diabetes",
 
 export function Profile() {
   const [profile, setProfile] = useState<MedicalProfile>(loadProfile());
+  const [shakeSOSEnabled, setShakeSOSEnabled] = useState(() => loadSettings().shakeSOSEnabled);
   const [newAllergy, setNewAllergy] = useState("");
   const [newCondition, setNewCondition] = useState("");
 
-  useEffect(() => { setProfile(loadProfile()); }, []);
+  useEffect(() => {
+    setProfile(loadProfile());
+    setShakeSOSEnabled(loadSettings().shakeSOSEnabled);
+  }, []);
 
   const update = (partial: Partial<MedicalProfile>) => setProfile((p) => ({ ...p, ...partial }));
 
   const handleSave = async () => {
     saveProfile(profile);
+    saveSettings({ shakeSOSEnabled });
     const contactNumbers = profile.emergencyContacts.map((contact) => contact.phone).filter(Boolean);
-    await syncAndroidEmergencyConfig(PRIMARY_EMERGENCY_NUMBER, contactNumbers);
-    toast.success("Profile saved successfully");
+    try {
+      await syncAndroidEmergencyConfig(PRIMARY_EMERGENCY_NUMBER, contactNumbers, shakeSOSEnabled);
+    } catch {
+      // Ignore non-Android bridge errors while still keeping settings saved in local storage.
+    }
+    toast.success("Settings saved successfully");
   };
 
   const addAllergy = (a: string) => {
@@ -52,9 +68,30 @@ export function Profile() {
   return (
     <div className="p-4 pb-28 space-y-4">
       <div className="pt-6 pb-2">
-        <p className="text-sm text-[#7c3aed]/70">Settings</p>
-        <h1 className="text-[#1e1b4b]">Emergency Profile</h1>
+        <p className="text-sm text-[#7c3aed]/70">Settings Menu</p>
+        <h1 className="text-[#1e1b4b]">Emergency Profile & SOS</h1>
       </div>
+
+      <GlassCard className="p-5 space-y-3">
+        <div className="flex items-center gap-2 mb-1">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#ef4444] to-[#b91c1c] flex items-center justify-center">
+            <Siren size={16} className="text-white" />
+          </div>
+          <span className="text-[#1e1b4b]">SOS Trigger Settings</span>
+        </div>
+        <button
+          onClick={() => setShakeSOSEnabled((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 rounded-2xl bg-white/60 border border-white/50"
+        >
+          <div className="text-left">
+            <p className="text-[#1e1b4b]">Shake to trigger SOS</p>
+            <p className="text-xs text-[#6b7280]">Default is OFF. Turn on only when you want shake detection.</p>
+          </div>
+          <div className={`w-12 h-7 rounded-full p-1 transition-colors ${shakeSOSEnabled ? "bg-[#7c3aed]" : "bg-[#cbd5e1]"}`}>
+            <div className={`w-5 h-5 rounded-full bg-white transition-transform ${shakeSOSEnabled ? "translate-x-5" : "translate-x-0"}`} />
+          </div>
+        </button>
+      </GlassCard>
 
       <GlassCard className="p-5 space-y-3">
         <div className="flex items-center gap-2 text-[#7c3aed] mb-1">

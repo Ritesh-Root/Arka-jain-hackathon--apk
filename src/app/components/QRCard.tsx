@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { compressToEncodedURIComponent } from "lz-string";
-import { loadProfile } from "../lib/storage";
+import { loadProfile, PROFILE_UPDATED_EVENT } from "../lib/storage";
 import { GlassCard } from "./GlassCard";
 import { QrCode, Download, Share2, Droplets } from "lucide-react";
 import { toast } from "sonner";
@@ -9,7 +9,17 @@ import { toast } from "sonner";
 export function QRCardPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [qrUrl, setQrUrl] = useState("");
-  const profile = loadProfile();
+  const [profile, setProfile] = useState(() => loadProfile());
+
+  useEffect(() => {
+    const refreshProfile = () => setProfile(loadProfile());
+    window.addEventListener(PROFILE_UPDATED_EVENT, refreshProfile);
+    window.addEventListener("storage", refreshProfile);
+    return () => {
+      window.removeEventListener(PROFILE_UPDATED_EVENT, refreshProfile);
+      window.removeEventListener("storage", refreshProfile);
+    };
+  }, []);
 
   useEffect(() => {
     const offlineData = {
@@ -20,6 +30,7 @@ export function QRCardPage() {
       c: profile.conditions,
       m: profile.medications.map((m) => `${m.name} ${m.dose}`),
       ec: profile.emergencyContacts.map((c) => ({ n: c.name, r: c.relationship, p: c.phone })),
+      u: profile.lastUpdatedAt,
     };
     const compressed = compressToEncodedURIComponent(JSON.stringify(offlineData));
     const base = window.location.origin;
