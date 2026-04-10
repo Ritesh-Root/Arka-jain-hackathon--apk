@@ -21,6 +21,7 @@ import com.getcapacitor.annotation.PermissionCallback;
     name = "HotwordService",
     permissions = {
         @Permission(alias = "audio", strings = { Manifest.permission.RECORD_AUDIO }),
+        @Permission(alias = "camera", strings = { Manifest.permission.CAMERA }),
         @Permission(alias = "call", strings = { Manifest.permission.CALL_PHONE }),
         @Permission(alias = "sms", strings = { Manifest.permission.SEND_SMS }),
         @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS })
@@ -36,14 +37,7 @@ public class HotwordPlugin extends Plugin {
         String contactsCsv = contactsToCsv(contacts);
 
         EmergencyConfigStore.saveConfig(getContext(), emergencyNumber, contactsCsv, shakeEnabled);
-
-        if (!permissionsGranted()) {
-            requestAllPermissions(call, "permissionsCallback");
-            return;
-        }
-
-        startHotwordService(emergencyNumber, contactsCsv, shakeEnabled);
-        call.resolve();
+        ensurePermissionsThenStart(call);
     }
 
     @PluginMethod
@@ -71,10 +65,29 @@ public class HotwordPlugin extends Plugin {
         call.resolve(result);
     }
 
-    @PermissionCallback
-    private void permissionsCallback(PluginCall call) {
-        if (!permissionsGranted()) {
-            call.reject("Required permissions were not granted.");
+    private void ensurePermissionsThenStart(PluginCall call) {
+        if (getPermissionState("audio") != PermissionState.GRANTED) {
+            requestPermissionForAlias("audio", call, "audioPermissionCallback");
+            return;
+        }
+
+        if (getPermissionState("camera") != PermissionState.GRANTED) {
+            requestPermissionForAlias("camera", call, "cameraPermissionCallback");
+            return;
+        }
+
+        if (getPermissionState("call") != PermissionState.GRANTED) {
+            requestPermissionForAlias("call", call, "callPermissionCallback");
+            return;
+        }
+
+        if (getPermissionState("sms") != PermissionState.GRANTED) {
+            requestPermissionForAlias("sms", call, "smsPermissionCallback");
+            return;
+        }
+
+        if (getPermissionState("notifications") != PermissionState.GRANTED) {
+            requestPermissionForAlias("notifications", call, "notificationsPermissionCallback");
             return;
         }
 
@@ -86,10 +99,54 @@ public class HotwordPlugin extends Plugin {
         call.resolve();
     }
 
-    private boolean permissionsGranted() {
-        return getPermissionState("audio") == PermissionState.GRANTED
-            && getPermissionState("call") == PermissionState.GRANTED
-            && getPermissionState("sms") == PermissionState.GRANTED;
+    @PermissionCallback
+    private void audioPermissionCallback(PluginCall call) {
+        if (getPermissionState("audio") != PermissionState.GRANTED) {
+            call.reject("Microphone permission is required for always-on SOS detection.");
+            return;
+        }
+
+        ensurePermissionsThenStart(call);
+    }
+
+    @PermissionCallback
+    private void cameraPermissionCallback(PluginCall call) {
+        if (getPermissionState("camera") != PermissionState.GRANTED) {
+            call.reject("Camera permission is required for patient scanning.");
+            return;
+        }
+
+        ensurePermissionsThenStart(call);
+    }
+
+    @PermissionCallback
+    private void callPermissionCallback(PluginCall call) {
+        if (getPermissionState("call") != PermissionState.GRANTED) {
+            call.reject("Call permission is required for automatic SOS calling.");
+            return;
+        }
+
+        ensurePermissionsThenStart(call);
+    }
+
+    @PermissionCallback
+    private void smsPermissionCallback(PluginCall call) {
+        if (getPermissionState("sms") != PermissionState.GRANTED) {
+            call.reject("SMS permission is required for emergency alerts.");
+            return;
+        }
+
+        ensurePermissionsThenStart(call);
+    }
+
+    @PermissionCallback
+    private void notificationsPermissionCallback(PluginCall call) {
+        if (getPermissionState("notifications") != PermissionState.GRANTED) {
+            call.reject("Notification permission is required to keep SOS service visible in background.");
+            return;
+        }
+
+        ensurePermissionsThenStart(call);
     }
 
     private void startHotwordService(String emergencyNumber, String contactsCsv, boolean shakeEnabled) {

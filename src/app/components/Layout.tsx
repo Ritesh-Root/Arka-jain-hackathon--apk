@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router";
 import { Home, QrCode, Map, Camera, Mic, Settings } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 import { SOSActive } from "./SOSActive";
 import {
   loadProfile,
@@ -15,6 +16,41 @@ import { enableAndroidBackgroundProtection, syncAndroidEmergencyConfig } from ".
 import { toast } from "sonner";
 
 const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+const PERMISSION_SETUP_KEY = "jeevan_rakshak_permission_setup_completed";
+
+type PermissionStep = {
+  id: "system" | "microphone" | "camera" | "location" | "notifications";
+  title: string;
+  description: string;
+};
+
+const PERMISSION_STEPS: PermissionStep[] = [
+  {
+    id: "system",
+    title: "System Motion Permission",
+    description: "Required for shake-based SOS trigger on supported phones.",
+  },
+  {
+    id: "microphone",
+    title: "Microphone Permission",
+    description: "Required for 24x7 SOS hotword listening.",
+  },
+  {
+    id: "camera",
+    title: "Camera Permission",
+    description: "Required for Scan Patient and emergency visual analysis.",
+  },
+  {
+    id: "location",
+    title: "Location Permission",
+    description: "Required to send exact coordinates during SOS.",
+  },
+  {
+    id: "notifications",
+    title: "Notification Permission",
+    description: "Required to keep background emergency guard service visible.",
+  },
+];
 
 function splitCsv(text: string): string[] {
   return text
@@ -30,6 +66,10 @@ export function Layout() {
   const [voiceListening, setVoiceListening] = useState(false);
   const [settings, setSettings] = useState(() => loadSettings());
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [permissionSetupOpen, setPermissionSetupOpen] = useState(false);
+  const [permissionStepIndex, setPermissionStepIndex] = useState(0);
+  const [permissionBusy, setPermissionBusy] = useState(false);
+  const [permissionError, setPermissionError] = useState("");
   const [setupName, setSetupName] = useState("");
   const [setupAge, setSetupAge] = useState("");
   const [setupBloodType, setSetupBloodType] = useState("");
@@ -67,6 +107,78 @@ export function Layout() {
     setSosActive(true);
     if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
   }, []);
+
+  const requestPermissionStep = useCallback(async (step: PermissionStep["id"]) => {
+    switch (step) {
+      case "system": {
+        const evt = window.DeviceMotionEvent as any;
+        if (evt && typeof evt.requestPermission === "function") {
+          const status = await evt.requestPermission();
+          return status === "granted";
+        }
+        return true;
+      }
+      case "microphone": {
+        if (!navigator.mediaDevices?.getUserMedia) return false;
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((t) => t.stop());
+        return true;
+      }
+      case "camera": {
+        if (!navigator.mediaDevices?.getUserMedia) return false;
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach((t) => t.stop());
+        return true;
+      }
+      case "location": {
+        return await new Promise<boolean>((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            () => resolve(true),
+            () => resolve(false),
+            { enableHighAccuracy: true, timeout: 15000 }
+          );
+        });
+      }
+      case "notifications": {
+        if (!("Notification" in window)) return true;
+        const result = await Notification.requestPermission();
+        return result === "granted";
+      }
+      default:
+        return true;
+    }
+  }, []);
+
+  const runPermissionStep = useCallback(async () => {
+    const current = PERMISSION_STEPS[permissionStepIndex];
+    if (!current || permissionBusy) return;
+
+    setPermissionBusy(true);
+    setPermissionError("");
+
+    try {
+      const granted = await requestPermissionStep(current.id);
+      if (!granted) {
+        setPermissionError(`Please allow ${current.title} to continue always-on SOS protection.`);
+        return;
+      }
+
+      if (permissionStepIndex >= PERMISSION_STEPS.length - 1) {
+        localStorage.setItem(PERMISSION_SETUP_KEY, "true");
+        setPermissionSetupOpen(false);
+        setPermissionStepIndex(0);
+        toast.success("All emergency permissions granted.");
+        await syncBackgroundProtection();
+        return;
+      }
+
+      setPermissionStepIndex((index) => index + 1);
+    } catch {
+      setPermissionError(`Could not complete ${current.title}. Please try again.`);
+    } finally {
+      setPermissionBusy(false);
+    }
+  }, [permissionBusy, permissionStepIndex, requestPermissionStep, syncBackgroundProtection]);
 
   useEffect(() => {
     const handleSettingsUpdated = () => setSettings(loadSettings());
@@ -126,6 +238,12 @@ export function Layout() {
 
   useEffect(() => {
     if (!onboardingOpen && isOnboardingCompleted()) {
+      const permissionDone = localStorage.getItem(PERMISSION_SETUP_KEY) === "true";
+      if (!permissionDone) {
+        setPermissionSetupOpen(true);
+        return;
+      }
+
       void syncBackgroundProtection();
     }
   }, [onboardingOpen, syncBackgroundProtection]);
@@ -153,6 +271,7 @@ export function Layout() {
 
   // Voice SOS detection
   useEffect(() => {
+    if (permissionSetupOpen) return;
     if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) return;
 
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
@@ -167,6 +286,17 @@ export function Layout() {
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript.toLowerCase().trim();
+
+        if (
+          transcript.includes("sos sos sos") ||
+          transcript.includes("help help help") ||
+          transcript.includes("bachao bachao bachao") ||
+          transcript.includes("बचाओ बचाओ बचाओ")
+        ) {
+          triggerSOS();
+          return;
+        }
+
         const hits = transcript.match(keywordPattern)?.length ?? 0;
 
         if (hits > 0) {
@@ -204,7 +334,7 @@ export function Layout() {
     return () => {
       try { recognition.stop(); } catch {}
     };
-  }, [triggerSOS]);
+  }, [permissionSetupOpen, triggerSOS]);
 
   useEffect(() => {
     if (!settings.shakeSOSEnabled) {
@@ -260,18 +390,54 @@ export function Layout() {
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-[#e0c3fc] via-[#d5c6f9] to-[#c7d2fe]">
       {/* Decorative blurred orbs */}
-      <div className="fixed top-[-80px] left-[-60px] w-[280px] h-[280px] rounded-full bg-[#c084fc]/30 blur-[80px] pointer-events-none" />
-      <div className="fixed top-[30%] right-[-80px] w-[240px] h-[240px] rounded-full bg-[#818cf8]/20 blur-[80px] pointer-events-none" />
-      <div className="fixed bottom-[10%] left-[-40px] w-[200px] h-[200px] rounded-full bg-[#67e8f9]/20 blur-[60px] pointer-events-none" />
+      <div className="fixed top-[-80px] left-[-60px] w-[280px] h-[280px] rounded-full bg-[#c084fc]/30 blur-[56px] pointer-events-none" />
+      <div className="fixed top-[30%] right-[-80px] w-[240px] h-[240px] rounded-full bg-[#818cf8]/20 blur-[52px] pointer-events-none" />
+      <div className="fixed bottom-[10%] left-[-40px] w-[200px] h-[200px] rounded-full bg-[#67e8f9]/20 blur-[44px] pointer-events-none" />
 
       {/* Voice indicator */}
       {voiceListening && (
-        <div className="fixed top-3 right-3 z-50 px-3 py-1.5 rounded-full bg-white/60 backdrop-blur-xl text-[#7c3aed] text-xs flex items-center gap-1.5 shadow-sm border border-white/40">
+        <div className="fixed top-3 right-3 z-50 px-3 py-1.5 rounded-full bg-white/60 backdrop-blur-lg text-[#7c3aed] text-xs flex items-center gap-1.5 shadow-sm border border-white/40">
           <Mic size={12} />
           <div className="w-1.5 h-1.5 rounded-full bg-[#7c3aed] animate-pulse" />
           Voice SOS/Help/Bachao/Madad
         </div>
       )}
+
+      {permissionSetupOpen && (() => {
+        const current = PERMISSION_STEPS[permissionStepIndex];
+        return (
+          <div className="fixed inset-0 z-[125] bg-[#1e1b4b]/55 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-white/40">
+              <p className="text-sm text-[#7c3aed]/80">Permissions Setup ({permissionStepIndex + 1}/{PERMISSION_STEPS.length})</p>
+              <h2 className="text-[#1e1b4b] mt-1">{current?.title}</h2>
+              <p className="text-sm text-[#6b7280] mt-1">{current?.description}</p>
+              <p className="text-xs text-[#9ca3af] mt-3">
+                Allow permissions one-by-one to keep SOS detection active even when app is not open.
+              </p>
+
+              {permissionError && (
+                <div className="mt-4 px-3 py-2 rounded-xl bg-red-50 text-red-600 text-sm border border-red-100">
+                  {permissionError}
+                </div>
+              )}
+
+              <button
+                onClick={runPermissionStep}
+                disabled={permissionBusy}
+                className="mt-5 w-full py-3 rounded-2xl bg-gradient-to-r from-[#a78bfa] to-[#7c3aed] text-white disabled:opacity-60"
+              >
+                {permissionBusy ? "Requesting permission..." : `Allow ${current?.title}`}
+              </button>
+
+              {Capacitor.getPlatform() === "android" && (
+                <p className="text-[11px] text-[#6b7280] mt-3">
+                  After this, keep battery optimization OFF for this app to improve 24x7 hotword reliability.
+                </p>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {onboardingOpen && (
         <div className="fixed inset-0 z-[120] bg-[#1e1b4b]/50 backdrop-blur-sm flex items-center justify-center p-4">
@@ -365,7 +531,7 @@ export function Layout() {
 
       {/* Bottom nav - pill style */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-4 pt-2">
-        <div className="bg-white/70 backdrop-blur-2xl rounded-full border border-white/50 shadow-[0_8px_32px_rgba(124,58,237,0.12)] px-2 py-2">
+        <div className="bg-white/70 backdrop-blur-xl rounded-full border border-white/50 shadow-[0_8px_24px_rgba(124,58,237,0.10)] px-2 py-2">
           <div className="flex items-center justify-around">
             {navItems.map((item) => {
               const active = location.pathname === item.path;

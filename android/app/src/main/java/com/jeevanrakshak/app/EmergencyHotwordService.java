@@ -247,7 +247,17 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
 
         for (String transcript : matches) {
             if (transcript == null) continue;
-            Matcher matcher = hotwordPattern.matcher(transcript.toLowerCase(Locale.ROOT));
+            String normalized = transcript.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+
+            if (normalized.contains("sos sos sos")
+                || normalized.contains("help help help")
+                || normalized.contains("bachao bachao bachao")
+                || normalized.contains("बचाओ बचाओ बचाओ")) {
+                triggerEmergencySequence("Hotword");
+                return;
+            }
+
+            Matcher matcher = hotwordPattern.matcher(normalized);
             while (matcher.find()) {
                 hits++;
             }
