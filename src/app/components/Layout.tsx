@@ -361,21 +361,21 @@ export function Layout() {
     }
   }, [onboardingOpen, syncBackgroundProtection]);
 
-  // Triple-tap detection
+  // Quadruple-tap detection (was 3 — bumped to 4 after accidental triggers in-field)
   useEffect(() => {
     const handleTap = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (target.closest('button, a, input, textarea, select, nav, [role="button"]')) {
+      if (target.closest('button, a, input, textarea, select, nav, label, [role="button"]')) {
         tapTimesRef.current = [];
         return;
       }
       const now = Date.now();
       tapTimesRef.current.push(now);
-      tapTimesRef.current = tapTimesRef.current.filter((t) => now - t < 800);
-      if (tapTimesRef.current.length >= 3) {
+      tapTimesRef.current = tapTimesRef.current.filter((t) => now - t < 1000);
+      if (tapTimesRef.current.length >= 4) {
         tapTimesRef.current = [];
-        emitDiagnostic("triple_tap_detected");
-        triggerSOS("triple_tap");
+        emitDiagnostic("quad_tap_detected");
+        triggerSOS("quad_tap");
       }
     };
 
@@ -383,9 +383,12 @@ export function Layout() {
     return () => document.removeEventListener("click", handleTap);
   }, [triggerSOS]);
 
-  // Voice SOS detection
+  // Voice SOS detection. Skipped on Android native — Chromium System WebView
+  // does not expose webkitSpeechRecognition, so EmergencyHotwordService handles
+  // hotword listening on the native side instead.
   useEffect(() => {
     if (permissionSetupOpen) return;
+    if (isAndroidNative) return;
     if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) return;
 
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
@@ -508,7 +511,7 @@ export function Layout() {
       }
       emitDiagnostic("voice_stopped");
     };
-  }, [permissionSetupOpen, triggerSOS]);
+  }, [isAndroidNative, permissionSetupOpen, triggerSOS]);
 
   useEffect(() => {
     if (!settings.shakeSOSEnabled) {

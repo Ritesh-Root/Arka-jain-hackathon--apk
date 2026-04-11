@@ -368,7 +368,7 @@ export function EyeWitness() {
     speakSummary(report.summary_hindi);
   }, [report, speakSummary]);
 
-  const forwardToAmbulance = useCallback(() => {
+  const forwardToAmbulance = useCallback(async () => {
     if (!report) {
       toast.error("Analyze the scene first before forwarding.");
       return;
@@ -385,14 +385,21 @@ export function EyeWitness() {
       `Summary: ${report.summary_english}`,
     ].join("\n");
 
-    const smsUrl = `sms:108?body=${encodeURIComponent(ambulanceMessage)}`;
-
+    // India's 108 ambulance number is voice-only short-code; Android SMS apps
+    // refuse to draft SMS to it. Copy the briefing to clipboard so responders
+    // can see it, then place the voice call.
     try {
-      window.location.href = smsUrl;
-      toast.success("Ambulance SMS draft opened.");
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(ambulanceMessage);
+        toast.success("Scene briefing copied. Dialing 108.");
+      } else {
+        toast.success("Dialing 108.");
+      }
     } catch {
-      window.location.href = "tel:108";
+      toast.success("Dialing 108.");
     }
+
+    window.location.href = "tel:108";
   }, [report]);
 
   const severityColor: Record<SceneSeverity, string> = {

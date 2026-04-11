@@ -5,6 +5,9 @@ import { ARKA_JAIN_JAMSHEDPUR_COORDS, ARKA_JAIN_JAMSHEDPUR_LABEL } from "../lib/
 import { Phone, MapPin, Mic, X, ChevronRight, MessageSquare, Droplets } from "lucide-react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
+import { Capacitor } from "@capacitor/core";
+
+const AUTO_DIAL_COUNTDOWN_SECONDS = 8;
 
 interface SOSActiveProps {
   onDeactivate: () => void;
@@ -20,24 +23,34 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
   );
   const [usingFallbackLocation, setUsingFallbackLocation] = useState(false);
   const [currentContactIndex, setCurrentContactIndex] = useState(0);
-  const [callStatus, setCallStatus] = useState<string>("Preparing emergency dispatch...");
+  const [callStatus, setCallStatus] = useState<string>("Ready. Auto-dialing primary contact shortly...");
   const [smsStatus, setSmsStatus] = useState<string>("Waiting for location lock...");
   const [timer, setTimer] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval>>();
-  const cascadeRef = useRef<ReturnType<typeof setTimeout>>();
+  const [autoDialCountdown, setAutoDialCountdown] = useState<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoDialRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaChunksRef = useRef<BlobPart[]>([]);
   const hasExportedRecordingRef = useRef(false);
-  const hasStartedCallsRef = useRef(false);
-  const hasTriggeredSmsRef = useRef(false);
+  const hasStartedAutoDialRef = useRef(false);
   const activeCoords = coords ?? ARKA_JAIN_JAMSHEDPUR_COORDS;
+  const isNative = Capacitor.isNativePlatform();
 
   const exportAudioEvidence = useCallback((blob: Blob) => {
     if (!blob.size || hasExportedRecordingRef.current) return;
     hasExportedRecordingRef.current = true;
+
+    // Android WebView does not honor <a download> for blob URLs, so on native
+    // platforms we just keep the blob in memory. On web we trigger the usual
+    // download path so the evidence is at least saved to the user's Downloads.
+    if (isNative) {
+      setSmsStatus((prev) => (prev.includes("Audio evidence") ? prev : `${prev} Audio recorded locally.`));
+      toast.success("SOS audio captured.");
+      return;
+    }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const fileName = `sos-audio-${timestamp}.webm`;
@@ -53,7 +66,7 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
     setTimeout(() => URL.revokeObjectURL(downloadUrl), 30000);
     setSmsStatus((prev) => (prev.includes("Audio evidence") ? prev : `${prev} Audio evidence saved.`));
     toast.success("SOS audio recording saved.");
-  }, []);
+  }, [isNative]);
 
   const stopAudioCapture = useCallback(() => {
     const recorder = mediaRecorderRef.current;
@@ -122,9 +135,18 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
     (lat: number, lng: number) => {
       const recipients = Array.from(new Set(callTargets.map((target) => formatPhone(target.phone)).filter(Boolean)));
       if (!recipients.length) return;
-      const smsUrl = `sms:${recipients.join(",")}?body=${encodeURIComponent(buildEmergencyMessage(lat, lng))}`;
+      // Android SMS apps are inconsistent about multi-recipient parsing in sms: URIs.
+      // Open the composer with the primary recipient only; users can forward or
+      // use the dedicated WhatsApp buttons for the rest.
+      const primary = recipients[0];
+      const body = encodeURIComponent(buildEmergencyMessage(lat, lng));
+      const smsUrl = `sms:${primary}?body=${body}`;
       window.location.href = smsUrl;
-      setSmsStatus(`SMS composer opened for ${recipients.length} emergency numbers. Tap send to dispatch.`);
+      setSmsStatus(
+        recipients.length > 1
+          ? `SMS composer opened for ${primary}. Use WhatsApp buttons for other contacts.`
+          : `SMS composer opened for ${primary}. Tap send to dispatch.`
+      );
     },
     [buildEmergencyMessage, callTargets]
   );
@@ -140,47 +162,53 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
     [callNumber, callTargets]
   );
 
+  const cancelAutoDial = useCallback(() => {
+    if (autoDialRef.current) {
+      clearInterval(autoDialRef.current);
+      autoDialRef.current = null;
+    }
+    setAutoDialCountdown(null);
+  }, []);
+
+  // Single cancelable countdown that auto-dials the FIRST emergency contact only.
+  // No background cascade — subsequent contacts must be dialed manually via the
+  // Call Next button to avoid surprise calls while the app is backgrounded.
   useEffect(() => {
-    if (hasStartedCallsRef.current) return;
+    if (hasStartedAutoDialRef.current) return;
     if (!callTargets.length) {
       setCallStatus(`No contacts configured. Add contacts in profile. Primary emergency: ${PRIMARY_EMERGENCY_NUMBER}`);
       return;
     }
-    hasStartedCallsRef.current = true;
-    dialContactAtIndex(0);
-  }, [callTargets, dialContactAtIndex]);
 
-  useEffect(() => {
-    if (!callTargets.length) return;
-    if (currentContactIndex >= callTargets.length - 1) {
-      setCallStatus("Reached last emergency number in cascade. Use Call button to retry.");
-      return;
-    }
+    hasStartedAutoDialRef.current = true;
+    setAutoDialCountdown(AUTO_DIAL_COUNTDOWN_SECONDS);
+    const first = callTargets[0];
+    setCallStatus(`Auto-dialing ${first.name} in ${AUTO_DIAL_COUNTDOWN_SECONDS}s. Tap Cancel to stop.`);
 
-    cascadeRef.current = setTimeout(() => {
-      const nextIndex = currentContactIndex + 1;
-      const nextTarget = callTargets[nextIndex];
-      setCallStatus(`No response detected. Trying next number: ${nextTarget.name}`);
-      dialContactAtIndex(nextIndex);
-    }, 30000);
+    autoDialRef.current = setInterval(() => {
+      setAutoDialCountdown((current) => {
+        if (current === null) return null;
+        const next = current - 1;
+        if (next <= 0) {
+          if (autoDialRef.current) {
+            clearInterval(autoDialRef.current);
+            autoDialRef.current = null;
+          }
+          dialContactAtIndex(0);
+          return null;
+        }
+        setCallStatus(`Auto-dialing ${first.name} in ${next}s. Tap Cancel to stop.`);
+        return next;
+      });
+    }, 1000);
 
-    return () => clearTimeout(cascadeRef.current);
-  }, [currentContactIndex, callTargets, dialContactAtIndex]);
-
-  useEffect(() => {
-    if (!coords || hasTriggeredSmsRef.current) return;
-    hasTriggeredSmsRef.current = true;
-
-    const timeout = setTimeout(() => {
-      try {
-        openEmergencySmsComposer(coords.lat, coords.lng);
-      } catch {
-        setSmsStatus("Could not open SMS app automatically. Use the Send SMS button.");
+    return () => {
+      if (autoDialRef.current) {
+        clearInterval(autoDialRef.current);
+        autoDialRef.current = null;
       }
-    }, 1500);
-
-    return () => clearTimeout(timeout);
-  }, [coords, openEmergencySmsComposer]);
+    };
+  }, [callTargets, dialContactAtIndex]);
 
   useEffect(() => {
     let sirenInterval: ReturnType<typeof setInterval> | undefined;
@@ -300,12 +328,13 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
 
   const callCurrentContact = () => {
     if (!currentContact) return;
+    cancelAutoDial();
     dialContactAtIndex(currentContactIndex);
   };
 
   const callNextContact = () => {
     if (currentContactIndex >= callTargets.length - 1) return;
-    clearTimeout(cascadeRef.current);
+    cancelAutoDial();
     dialContactAtIndex(currentContactIndex + 1);
   };
 
@@ -317,9 +346,18 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
   };
 
   const deactivate = () => {
+    cancelAutoDial();
     if (audioCtxRef.current && audioCtxRef.current.state !== "closed") audioCtxRef.current.close();
     stopAudioCapture();
     onDeactivate();
+  };
+
+  // Navigating to /copilot or /witness from the SOS screen is useless while
+  // Layout still returns <SOSActive />. Deactivate SOS first so the target
+  // route actually renders in the Outlet.
+  const navigateAndDeactivate = (path: string) => {
+    deactivate();
+    navigate(path);
   };
 
   return (
@@ -343,6 +381,14 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
         <div className="bg-white/15 backdrop-blur-xl rounded-3xl p-4 border border-white/10 space-y-2">
           <p className="text-sm">Call Status: <span className="opacity-80">{callStatus}</span></p>
           <p className="text-sm">SMS Status: <span className="opacity-80">{smsStatus}</span></p>
+          {autoDialCountdown !== null && (
+            <button
+              onClick={cancelAutoDial}
+              className="w-full px-3 py-2 bg-white text-[#dc2626] rounded-xl text-sm"
+            >
+              Cancel auto-dial ({autoDialCountdown}s)
+            </button>
+          )}
           <div className="flex gap-2 pt-1">
             <button onClick={callCurrentContact} className="flex-1 px-3 py-2 bg-white/20 rounded-xl text-sm">Call Now</button>
             <button onClick={callNextContact} className="flex-1 px-3 py-2 bg-white/20 rounded-xl text-sm">Call Next</button>
@@ -418,10 +464,10 @@ export function SOSActive({ onDeactivate }: SOSActiveProps) {
 
         {/* Quick actions */}
         <div className="flex gap-3">
-          <button onClick={() => navigate("/copilot")} className="flex-1 py-3.5 bg-white/15 backdrop-blur rounded-2xl text-center border border-white/10 active:scale-[0.97] transition-transform">
+          <button onClick={() => navigateAndDeactivate("/copilot")} className="flex-1 py-3.5 bg-white/15 backdrop-blur rounded-2xl text-center border border-white/10 active:scale-[0.97] transition-transform">
             AI First-Aid Copilot
           </button>
-          <button onClick={() => navigate("/witness")} className="flex-1 py-3.5 bg-white/15 backdrop-blur rounded-2xl text-center border border-white/10 active:scale-[0.97] transition-transform">
+          <button onClick={() => navigateAndDeactivate("/witness")} className="flex-1 py-3.5 bg-white/15 backdrop-blur rounded-2xl text-center border border-white/10 active:scale-[0.97] transition-transform">
             AI Eye Witness
           </button>
         </div>

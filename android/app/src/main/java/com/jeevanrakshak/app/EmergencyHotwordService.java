@@ -8,6 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -81,13 +82,35 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        startForeground(NOTIFICATION_ID, buildNotification("Background protection active"));
+        startForegroundCompat("Background protection active");
         initializeSpeechRecognizer();
         initializeShakeDetector();
         try {
             toneGenerator = new ToneGenerator(AudioManager.STREAM_ALARM, 100);
         } catch (Exception ignored) {
             toneGenerator = null;
+        }
+    }
+
+    private void startForegroundCompat(String text) {
+        Notification notification = buildNotification(text);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                );
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (Exception ignored) {
+            // If the system refuses the type (rare OEM case), fall back to the untyped form so the service stays alive.
+            try {
+                startForeground(NOTIFICATION_ID, notification);
+            } catch (Exception ignored2) {
+                // Nothing more we can do; the service will be stopped by the OS shortly.
+            }
         }
     }
 
@@ -346,7 +369,14 @@ public class EmergencyHotwordService extends Service implements RecognitionListe
         }
 
         try {
-            SmsManager smsManager = SmsManager.getDefault();
+            SmsManager smsManager;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                smsManager = getSystemService(SmsManager.class);
+            } else {
+                smsManager = SmsManager.getDefault();
+            }
+            if (smsManager == null) return false;
+
             for (String number : numbers) {
                 smsManager.sendTextMessage(number, null, message, null, null);
             }

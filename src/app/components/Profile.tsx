@@ -398,7 +398,21 @@ export function Profile() {
         </div>
         <input className={inputClass} placeholder="Full Name" value={profile.fullName} onChange={(e) => update({ fullName: e.target.value })} />
         <div className="flex gap-2">
-          <input type="date" className={`flex-1 ${inputClass}`} value={profile.dob} onChange={(e) => { const d = e.target.value; const age = new Date().getFullYear() - new Date(d).getFullYear(); update({ dob: d, age }); }} />
+          <input type="date" className={`flex-1 ${inputClass}`} value={profile.dob} onChange={(e) => {
+            const d = e.target.value;
+            const birth = new Date(d);
+            if (Number.isNaN(birth.getTime())) {
+              update({ dob: d });
+              return;
+            }
+            const today = new Date();
+            let age = today.getFullYear() - birth.getFullYear();
+            const monthDelta = today.getMonth() - birth.getMonth();
+            if (monthDelta < 0 || (monthDelta === 0 && today.getDate() < birth.getDate())) {
+              age--;
+            }
+            update({ dob: d, age: age >= 0 ? age : profile.age });
+          }} />
           <input type="number" className={`w-20 ${inputClass}`} placeholder="Age" value={profile.age} onChange={(e) => update({ age: +e.target.value })} />
         </div>
         <select className={inputClass} value={profile.bloodType} onChange={(e) => update({ bloodType: e.target.value })}>

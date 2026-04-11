@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { Capacitor } from "@capacitor/core";
 import { loadProfile } from "../lib/storage";
 import { Mic, MicOff, Volume2, VolumeX, Droplets, Send } from "lucide-react";
 
@@ -76,6 +77,13 @@ export function Copilot() {
   const [muted, setMuted] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  // Android System WebView does not expose webkitSpeechRecognition, so the
+  // in-app voice button is pointless in the APK and we hide it there.
+  const isAndroidNative = Capacitor.getPlatform() === "android";
+  const webSpeechAvailable =
+    !isAndroidNative &&
+    typeof window !== "undefined" &&
+    ("webkitSpeechRecognition" in window || "SpeechRecognition" in window);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -231,7 +239,7 @@ export function Copilot() {
   );
 
   const startListening = () => {
-    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) return;
+    if (!webSpeechAvailable) return;
 
     const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
     const recognition = new SpeechRecognition();
@@ -336,14 +344,16 @@ export function Copilot() {
             className="flex-1 px-4 py-3 rounded-2xl bg-white/70 border border-white/50 focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/30"
           />
 
-          <button
-            onClick={isListening ? () => { recognitionRef.current?.stop(); setIsListening(false); } : startListening}
-            className={`px-4 rounded-2xl ${
-              isListening ? "bg-red-500 text-white" : "bg-white/70 text-[#7c3aed] border border-white/50"
-            }`}
-          >
-            {isListening ? <MicOff size={20} /> : <Mic size={20} />}
-          </button>
+          {webSpeechAvailable && (
+            <button
+              onClick={isListening ? () => { recognitionRef.current?.stop(); setIsListening(false); } : startListening}
+              className={`px-4 rounded-2xl ${
+                isListening ? "bg-red-500 text-white" : "bg-white/70 text-[#7c3aed] border border-white/50"
+              }`}
+            >
+              {isListening ? <MicOff size={20} /> : <Mic size={20} />}
+            </button>
+          )}
 
           <button
             onClick={() => runAgent(input)}
