@@ -25,3 +25,8 @@ android/build/
 android/app/build/
 android/app/src/main/assets/public/
 local.properties
+
+# Android signing secrets
+android/keystore.properties
+android/*.jks
+android/*.keystore

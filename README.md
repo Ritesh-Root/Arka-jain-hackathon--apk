@@ -231,6 +231,7 @@ Native Android integration adds always-on protection scaffolding:
 - GitHub Actions workflow for APK build
 - Automated artifact uploads:
   - Debug APK
+  - Release APK (signed if signing secrets are configured, otherwise unsigned)
   - Gradle build log
 
 ## Route Map
@@ -351,12 +352,21 @@ Pipeline summary:
 3. Setup Java 21
 4. Setup Android SDK + install platform tools/build tools
 5. Install dependencies (`npm install --legacy-peer-deps`)
-6. Build web app (`npm run build`)
-7. Copy web assets into Android assets directory
-8. Build debug APK with Gradle
+6. Build web app + sync Android project (`npm run android:sync`)
+7. Optionally decode release keystore from `ANDROID_KEYSTORE_BASE64`
+8. Build release + debug APKs with Gradle
 9. Upload artifacts:
-   - `jeevan-rakshak-debug-apk`
+  - `jeevan-rakshak-apks`
    - `gradle-build-log`
+
+Optional signing secrets for CI:
+
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_STORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+If the signing secrets are not set, release APK output is still produced as unsigned.
 
 ## Permissions Used
 

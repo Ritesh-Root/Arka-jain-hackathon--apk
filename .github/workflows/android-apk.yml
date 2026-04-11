@@ -38,14 +38,8 @@ jobs:
       - name: Install npm dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Build web app
-        run: npm run build
-
-      - name: Copy web assets to Android
-        run: |
-          mkdir -p android/app/src/main/assets/public
-          cp -r dist/. android/app/src/main/assets/public/
-          cp capacitor.config.json android/app/src/main/assets/capacitor.config.json
+      - name: Build web app and sync Capacitor Android
+        run: npm run android:sync
 
       - name: Ensure Gradle wrapper is executable
         run: chmod +x android/gradlew
@@ -53,25 +47,33 @@ jobs:
       - name: Configure Android SDK path
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
-      - name: Build debug APK
-        working-directory: android
+      - name: Decode signing keystore (optional)
         run: |
-          set +e
-          ./gradlew assembleDebug --stacktrace --no-daemon > ../gradle-build.log 2>&1
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "Gradle build failed. Last 200 lines:"
-            tail -n 200 ../gradle-build.log
-            summary=$(tail -n 40 ../gradle-build.log | tr '\n' '|' | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
-            echo "::error title=Gradle assembleDebug failed::$summary"
-            exit "$status"
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+            echo "ANDROID_STORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "Signing keystore configured"
+          else
+            echo "No signing keystore secret found; release APK will be unsigned"
           fi
 
-      - name: Upload debug APK
+      - name: Build release and debug APKs
+        working-directory: android
+        env:
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease assembleDebug --stacktrace --no-daemon | tee ../gradle-build.log
+
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: jeevan-rakshak-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: jeevan-rakshak-apks
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/*.apk
 
       - name: Upload Gradle build log
         if: always()

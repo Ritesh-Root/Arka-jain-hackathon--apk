@@ -1,4 +1,21 @@
+import java.util.Properties
+
 apply plugin: 'com.android.application'
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { stream ->
+        keystoreProperties.load(stream)
+    }
+}
+
+def releaseStoreFilePath = (keystoreProperties.getProperty('storeFile') ?: System.getenv('ANDROID_STORE_FILE'))?.trim()
+def releaseStoreFile = releaseStoreFilePath ? rootProject.file(releaseStoreFilePath) : null
+def releaseStorePassword = (keystoreProperties.getProperty('storePassword') ?: System.getenv('ANDROID_STORE_PASSWORD'))?.trim()
+def releaseKeyAlias = (keystoreProperties.getProperty('keyAlias') ?: System.getenv('ANDROID_KEY_ALIAS'))?.trim()
+def releaseKeyPassword = (keystoreProperties.getProperty('keyPassword') ?: System.getenv('ANDROID_KEY_PASSWORD'))?.trim()
+def hasReleaseSigning = releaseStoreFile?.exists() && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
 
 android {
     namespace = "com.jeevanrakshak.app"
@@ -16,8 +33,23 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile releaseStoreFile
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            } else {
+                logger.lifecycle("Release signing credentials not found. Building unsigned release APK.")
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
