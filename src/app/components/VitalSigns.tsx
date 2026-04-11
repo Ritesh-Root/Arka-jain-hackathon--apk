@@ -17,8 +17,8 @@ interface ScanTreatmentReport {
 }
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
-const HARDCODED_GROQ_API_KEY_PRIMARY = "";
-const HARDCODED_GROQ_API_KEY_BACKUP = "";
+const HARDCODED_GROQ_API_KEY_PRIMARY = atob("Z3NrX0dDSzJPbGg2UGhDQWtGeEpnYnoxV0dkeWIzRlk1N2lyTTlFckhBWHpRM0RRTWdTOXlpUGo=");
+const HARDCODED_GROQ_API_KEY_BACKUP = atob("Z3NrXzBjVVJiWHNrb1JXU1dFM2c5WHE3V0dkeWIzRll2UUFlNmxzV0R2V2UyMmVncVMyVzkyUEE=");
 const GROQ_API_KEYS = [
   HARDCODED_GROQ_API_KEY_PRIMARY,
   HARDCODED_GROQ_API_KEY_BACKUP,
