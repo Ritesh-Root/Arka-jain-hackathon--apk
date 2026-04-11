@@ -292,7 +292,7 @@ Notes:
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 22+
 - npm
 - Android Studio (for native run/build)
 - Android SDK platform 36 + build tools 36.0.0
@@ -348,7 +348,7 @@ Triggers:
 Pipeline summary:
 
 1. Checkout repository
-2. Setup Node 20
+2. Setup Node 22
 3. Setup Java 21
 4. Setup Android SDK + install platform tools/build tools
 5. Install dependencies (`npm install --legacy-peer-deps`)
